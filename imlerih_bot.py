@@ -11,6 +11,7 @@ import time
 import re
 import shutil
 import signal
+import requests
 from collections import defaultdict
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -145,6 +146,60 @@ def cleanup_old_activity():
         # Если список пуст, удаляем пользователя
         if not user_activity[user_id]:
             user_activity.pop(user_id, None)
+
+# ========== ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ ССЫЛКИ НА КЛОНА ==========
+
+def get_bot_username(token: str) -> str:
+    """Получает username бота через Telegram API"""
+    try:
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("ok") and "result" in data:
+                username = data["result"].get("username")
+                if username:
+                    logging.info(f"✅ Получен username бота: @{username}")
+                    return username
+                else:
+                    logging.warning(f"⚠️ У бота нет username")
+                    return None
+            else:
+                logging.error(f"❌ API вернуло ошибку: {data}")
+                return None
+        else:
+            logging.error(f"❌ Ошибка HTTP {response.status_code}: {response.text}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        logging.error("⏰ Таймаут при получении username бота")
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"❌ Ошибка соединения при получении username: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"❌ Неожиданная ошибка при получении username: {e}")
+        return None
+
+def generate_clone_link(token: str) -> str:
+    """Генерирует корректную ссылку для открытия созданного клона-бота"""
+    try:
+        # Получаем username бота через API
+        username = get_bot_username(token)
+        
+        if username:
+            # Формируем правильную ссылку на бота с username
+            bot_link = f"https://t.me/{username}"
+            logging.info(f"✅ Сгенерирована ссылка на бота: {bot_link}")
+            return bot_link
+        else:
+            logging.warning("⚠️ Не удалось получить username бота для формирования ссылки")
+            return None
+            
+    except Exception as e:
+        logging.error(f"❌ Ошибка генерации ссылки на клона: {e}")
+        return None
 
 # ========= КНОПКИ ========
 
@@ -294,40 +349,34 @@ def save_clone_process_info(clone_id: str, pid: int, token: str):
         logging.error(f"❌ Ошибка сохранения информации о процессе: {e}")
         return False
 
-def create_clone_directly(token: str) -> tuple[bool, str]:
-    """Создание резервного клона напрямую как фоновый процесс"""
+def create_simple_clone(token: str) -> tuple[bool, str]:
+    """Создание простого работающего клона"""
     try:
-        logging.info(f"🔄 Начинаю создание клона с токеном: {token[:10]}...")
+        logging.info(f"🔄 Начинаю создание простого клона с токеном: {token[:10]}...")
         
         # 1. Создаем уникальный ID для клона
         clone_id = f"clone_{int(time.time())}_{random.randint(1000, 9999)}"
         logging.info(f"✅ Создан ID клона: {clone_id}")
         
-        # 2. Создаем простой скрипт клона
-        clone_script = f"""#!/usr/bin/env python3
-# Клон бота {clone_id}
+        # 2. Создаем простой, но полнофункциональный скрипт клона
+        clone_script = f'''#!/usr/bin/env python3
+"""
+ПРОСТОЙ РЕЗЕРВНЫЙ КЛОН БОТА
+ID: {clone_id}
+Токен: {token[:10]}...
+"""
 
 import asyncio
 import logging
 import sys
 import os
-import signal
 import time
 
-# Добавляем путь для импортов
-sys.path.insert(0, '/var/www/imlerih_bot')
-
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-
-# Токен клона
-BOT_TOKEN = "{token}"
-
 # Настройка логирования
-log_file = f"/var/www/imlerih_bot/logs/clone_{{clone_id}}.log"
+log_file = f"/var/www/imlerih_bot/logs/clone_{clone_id}.log"
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - CLONE_{clone_id} - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file),
         logging.StreamHandler(sys.stdout)
@@ -336,61 +385,127 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Импорты должны быть после настройки логирования
+try:
+    from aiogram import Bot, Dispatcher, types
+    from aiogram.filters import Command
+    from aiogram.fsm.storage.memory import MemoryStorage
+    logger.info("✅ Библиотеки aiogram импортированы")
+except ImportError as e:
+    logger.error(f"❌ Ошибка импорта aiogram: {{e}}")
+    sys.exit(1)
+
+# Токен клона
+BOT_TOKEN = "{token}"
+
+# Создаем бота и диспетчер
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer(f"🤖 Я резервный клон! ID: {clone_id}\\nТокен: {token[:10]}...")
+    try:
+        logger.info(f"🎉 Клон получил /start от {{message.from_user.id}}")
+        await message.answer(
+            f"🤖 <b>Я резервный клон!</b>\\n"
+            f"ID: <code>{clone_id}</code>\\n"
+            f"Токен: <code>{{token[:10]}}...</code>\\n\\n"
+            f"🔄 <b>Режим работы:</b> Polling\\n"
+            f"✅ <b>Статус:</b> Активен\\n\\n"
+            f"Отправьте /help для списка команд",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка в start_handler: {{e}}")
+
+@dp.message(Command("help"))
+async def help_handler(message: types.Message):
+    await message.answer(
+        f"🔧 <b>Команды клона {clone_id}:</b>\\n\\n"
+        f"/start - информация о клоне\\n"
+        f"/status - статус клона\\n"
+        f"/ping - проверка работы\\n"
+        f"/token - показать часть токена\\n\\n"
+        f"🆔 <b>ID:</b> <code>{clone_id}</code>",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("status"))
 async def status_handler(message: types.Message):
-    await message.answer(f"✅ Резервный клон работает!\\nID: {clone_id}\\nЗапущен: {time.ctime()}")
+    await message.answer(
+        f"📊 <b>Статус клона:</b>\\n"
+        f"🟢 <b>Работает</b>\\n"
+        f"🆔 ID: <code>{clone_id}</code>\\n"
+        f"⏰ Запущен: {time.ctime()}\\n"
+        f"🔑 Токен: {{token[:10]}}...\\n"
+        f"🤖 Пользователей: 1",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("ping"))
 async def ping_handler(message: types.Message):
-    await message.answer(f"🏓 Pong! Клон {clone_id} жив")
+    await message.answer(f"🏓 <b>Pong!</b>\\nКлон {clone_id} активен", parse_mode="HTML")
+
+@dp.message(Command("token"))
+async def token_handler(message: types.Message):
+    await message.answer(
+        f"🔑 <b>Токен клона:</b>\\n"
+        f"<code>{{token[:20]}}...</code>\\n\\n"
+        f"🆔 <b>ID клона:</b> <code>{clone_id}</code>",
+        parse_mode="HTML"
+    )
+
+@dp.message()
+async def echo_handler(message: types.Message):
+    """Эхо-обработчик для тестирования"""
+    if message.text:
+        await message.answer(
+            f"📨 <b>Получено сообщение:</b>\\n"
+            f"{{message.text}}\\n\\n"
+            f"🤖 <b>Ответ от клона {clone_id}</b>",
+            parse_mode="HTML"
+        )
 
 async def main():
+    """Основная функция клона"""
     try:
-        logger.info(f"🚀 Запуск резервного клона {{clone_id}}...")
-        logger.info(f"🔑 Токен: {token[:10]}...")
+        logger.info(f"🚀 Запуск резервного клона {clone_id}...")
+        logger.info(f"🔑 Токен: {{token[:10]}}...")
+        logger.info(f"📁 Лог файл: {{log_file}}")
         
         # Удаляем вебхук если был
         await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("🗑️ Вебхук удален (если был)")
         
+        # Запускаем polling
         logger.info("🔄 Запуск polling...")
         await dp.start_polling(bot)
         
-    except asyncio.CancelledError:
-        logger.info("⛔ Получен сигнал остановки")
     except Exception as e:
-        logger.error(f"❌ Ошибка в клоне: {{e}}")
+        logger.error(f"❌ Критическая ошибка в клоне: {{e}}")
         raise
     finally:
-        logger.info(f"👋 Остановка клона {{clone_id}}")
+        logger.info(f"⛔ Остановка клона {clone_id}")
         await bot.session.close()
 
-def signal_handler(signum, frame):
-    logger.info(f"📶 Получен сигнал {{signum}}, останавливаюсь...")
-    raise asyncio.CancelledError
-
 if __name__ == "__main__":
-    # Регистрируем обработчики сигналов
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
+    logger.info("=" * 50)
+    logger.info(f"🌟 ЗАПУСК КЛОНА БОТА")
+    logger.info(f"🆔 ID: {clone_id}")
+    logger.info(f"🔑 Токен: {token[:10]}...")
+    logger.info(f"⏰ Время: {time.ctime()}")
+    logger.info("=" * 50)
     
-    # Запускаем бота
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("👆 Остановка по Ctrl+C")
     except Exception as e:
-        logger.error(f"💥 Критическая ошибка: {{e}}")
+        logger.error(f"💥 Критическая ошибка запуска: {{e}}")
         sys.exit(1)
-"""
+'''
         
-        # 3. Сохраняем скрипт клона во временную директорию
+        # 3. Сохраняем скрипт клона
         script_filename = f"/var/www/imlerih_bot/clones/bot_{clone_id}.py"
         
         # Создаем директорию если её нет
@@ -403,11 +518,11 @@ if __name__ == "__main__":
         os.chmod(script_filename, 0o755)
         logging.info(f"✅ Создан скрипт клона: {script_filename}")
         
-        # 5. Запускаем клон как фоновый процесс
+        # 5. Запускаем клон как фоновый процесс с nohup
         log_file = f"/var/www/imlerih_bot/logs/clone_{clone_id}.log"
         
         # Используем nohup для запуска в фоне
-        cmd = f"nohup python3 {script_filename} > {log_file} 2>&1 & echo $!"
+        cmd = f"cd /var/www/imlerih_bot && nohup python3 {script_filename} > {log_file} 2>&1 & echo $!"
         
         logging.info(f"🚀 Запускаю команду: {cmd}")
         
@@ -416,7 +531,8 @@ if __name__ == "__main__":
             cmd,
             shell=True,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=30
         )
         
         if result.returncode == 0 and result.stdout.strip():
@@ -426,39 +542,76 @@ if __name__ == "__main__":
             # Сохраняем информацию о процессе
             save_clone_process_info(clone_id, pid, token)
             
-            # 6. Ждем немного и проверяем, запустился ли процесс
-            time.sleep(2)
+            # 6. Ждем и проверяем лог на ошибки
+            time.sleep(3)
             
-            # Проверяем, жив ли процесс
-            try:
-                os.kill(pid, 0)  # Проверка существования процесса
-                process_running = True
-            except OSError:
-                process_running = False
-                logging.warning(f"⚠️ Процесс {pid} не запущен после ожидания")
-            
-            # 7. Проверяем лог файл на наличие ошибок
+            # Проверяем лог файл
             log_content = ""
             if os.path.exists(log_file):
                 with open(log_file, 'r') as f:
-                    log_content = f.read(1000)  # Читаем первые 1000 символов
+                    log_content = f.read(2000)
+                logging.info(f"📄 Содержимое лога ({len(log_content)} символов): {log_content[:500]}...")
+            
+            # 7. Проверяем, жив ли процесс
+            try:
+                os.kill(pid, 0)
+                process_running = True
+                logging.info(f"✅ Процесс {pid} жив")
+            except OSError:
+                process_running = False
+                logging.warning(f"⚠️ Процесс {pid} не запущен")
             
             # 8. Сохраняем токен
             save_backup_token(token)
             
-            if process_running:
-                return True, f"✅ Резервный клон создан и запущен!\nID: {clone_id}\nPID: {pid}\nЛог: {log_file}\nСтатус: {'🟢 Запущен' if process_running else '🔴 Не запущен'}\n\nПервые строки лога:\n{log_content[:500]}"
+            # 9. Генерируем ссылку на бота - теперь через API
+            bot_link = generate_clone_link(token)
+            
+            # 10. Проверяем наличие ошибок в логе
+            has_errors = "ImportError" in log_content or "ModuleNotFoundError" in log_content
+            
+            if process_running and not has_errors:
+                # УПРОЩЕННОЕ СООБЩЕНИЕ ТОЛЬКО СО ССЫЛКОЙ
+                message_text = f"✅ Резервный клон создан и запущен!"
+                
+                if bot_link:
+                    # Создаем кнопку со ссылкой
+                    open_clone_button = InlineKeyboardMarkup(
+                        inline_keyboard=[[
+                            InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)
+                        ]]
+                    )
+                    return True, (message_text, open_clone_button)
+                else:
+                    # Если не удалось получить username, все равно возвращаем успех
+                    return True, (message_text, None)
+                    
+            elif has_errors:
+                return False, (
+                    f"⚠️ <b>Клон создан, но есть ошибки импорта</b>\n\n"
+                    f"<b>Ошибка:</b> Проблема с импортом aiogram\n"
+                    f"<b>Решение:</b> Установите aiogram в системе\n"
+                    f"<code>pip install aiogram</code>"
+                )
             else:
-                return False, f"⚠️ Клон создан, но возможно не запустился\nID: {clone_id}\nPID: {pid}\nПроверьте лог: {log_file}"
-        
+                return False, (
+                    f"⚠️ <b>Клон создан, но не запустился</b>\n\n"
+                    f"<b>Проверьте:</b>\n"
+                    f"1. Лог файл на наличие ошибок\n"
+                    f"2. Доступность Python3 и aiogram\n"
+                    f"3. Корректность токена бота"
+                )
         else:
-            error_msg = result.stderr if result.stderr else "Неизвестная ошибка"
+            error_msg = result.stderr if result.stderr else result.stdout
             logging.error(f"❌ Ошибка запуска клона: {error_msg}")
-            return False, f"Ошибка запуска клона: {error_msg}"
+            return False, f"❌ Ошибка запуска клона: {error_msg}"
         
+    except subprocess.TimeoutExpired:
+        logging.error("⏰ Таймаут при запуске клона")
+        return False, "Таймаут при запуске клона (превышено 30 секунд)"
     except Exception as e:
         logging.error(f"❌ Исключение при создании клона: {e}")
-        return False, f"Исключение при создании клона: {str(e)}"
+        return False, f"❌ Исключение при создании клона: {str(e)}"
 
 def create_clone_via_manager(token: str) -> tuple[bool, str]:
     """Создание резервного клона через менеджер или напрямую"""
@@ -481,15 +634,29 @@ def create_clone_via_manager(token: str) -> tuple[bool, str]:
             
             if result.returncode == 0:
                 save_backup_token(token)
-                return True, f"✅ Клон создан через менеджер\n{result.stdout}"
+                
+                # Генерируем ссылку на бота
+                bot_link = generate_clone_link(token)
+                message_text = f"✅ Резервный клон создан и запущен!"
+                
+                if bot_link:
+                    # Создаем кнопку со ссылкой
+                    open_clone_button = InlineKeyboardMarkup(
+                        inline_keyboard=[[
+                            InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)
+                        ]]
+                    )
+                    return True, (message_text, open_clone_button)
+                else:
+                    return True, (message_text, None)
             else:
                 # Если менеджер не сработал, пробуем напрямую
                 logging.warning("⚠️ Менеджер клонов вернул ошибку, пробую создать напрямую")
-                return create_clone_directly(token)
+                return create_simple_clone(token)
         else:
             # Менеджера нет, создаем напрямую
             logging.info("⚠️ Менеджер клонов не найден, создаю клон напрямую")
-            return create_clone_directly(token)
+            return create_simple_clone(token)
             
     except subprocess.TimeoutExpired:
         logging.error("⏰ Таймаут при создании клона")
@@ -514,46 +681,51 @@ def get_clones_list() -> str:
     """Получение списка всех клонов"""
     try:
         # Проверяем активные процессы клонов
-        output_lines = []
+        output_lines = ["📋 <b>Список клонов:</b>"]
         
         # Проверяем файл с процессами
         if os.path.exists(CLONE_PROCESSES_FILE):
             with open(CLONE_PROCESSES_FILE, 'r') as f:
                 processes = json.load(f)
             
-            for clone_id, info in processes.items():
-                pid = info.get("pid", 0)
-                status = info.get("status", "unknown")
-                token_preview = info.get("token", "unknown")
-                
-                # Проверяем, жив ли процесс
-                try:
-                    os.kill(pid, 0)
-                    process_status = "🟢 Запущен"
-                except OSError:
-                    process_status = "🔴 Остановлен"
-                
-                output_lines.append(f"• {clone_id}: PID={pid}, {process_status}, токен={token_preview}")
+            if not processes:
+                output_lines.append("\n📭 Активных клонов нет")
+            else:
+                for clone_id, info in processes.items():
+                    pid = info.get("pid", 0)
+                    token_preview = info.get("token", "unknown")
+                    start_time = info.get("start_time", 0)
+                    
+                    # Проверяем, жив ли процесс
+                    try:
+                        os.kill(pid, 0)
+                        process_status = "🟢 Запущен"
+                        uptime = int(time.time() - start_time)
+                        uptime_str = f"{uptime // 3600}ч {(uptime % 3600) // 60}м"
+                    except OSError:
+                        process_status = "🔴 Остановлен"
+                        uptime_str = "неактивен"
+                    
+                    output_lines.append(f"\n• <b>{clone_id}</b>")
+                    output_lines.append(f"  PID: {pid}, Статус: {process_status}")
+                    output_lines.append(f"  Токен: {token_preview}")
+                    output_lines.append(f"  Время работы: {uptime_str}")
+        else:
+            output_lines.append("\n📭 Файл процессов не найден")
         
-        # Проверяем процессы через ps
+        # Проверяем логи клонов
         try:
-            result = subprocess.run(
-                ["ps", "aux", "|", "grep", "bot_clone_", "|", "grep", "-v", "grep"],
-                shell=True,
-                capture_output=True,
-                text=True
-            )
-            
-            if result.stdout:
-                output_lines.append("\n📊 Активные процессы:")
-                for line in result.stdout.strip().split('\n'):
-                    if line:
-                        output_lines.append(f"  {line[:100]}")
+            logs_dir = "/var/www/imlerih_bot/logs"
+            if os.path.exists(logs_dir):
+                clone_logs = [f for f in os.listdir(logs_dir) if f.startswith("clone_")]
+                if clone_logs:
+                    output_lines.append(f"\n📁 <b>Лог файлы ({len(clone_logs)}):</b>")
+                    for log in sorted(clone_logs)[-5:]:  # Последние 5 логов
+                        log_path = os.path.join(logs_dir, log)
+                        size = os.path.getsize(log_path) if os.path.exists(log_path) else 0
+                        output_lines.append(f"  {log} ({size} байт)")
         except Exception as e:
-            output_lines.append(f"\n⚠️ Ошибка проверки процессов: {e}")
-        
-        if not output_lines:
-            return "📭 Активные клоны не найдены"
+            output_lines.append(f"\n⚠️ Ошибка проверки логов: {e}")
         
         return "\n".join(output_lines)
         
@@ -604,10 +776,11 @@ async def test_clone_command(message: types.Message):
         
         await message.answer("🧪 <b>Тест создания клона...</b>\nИспользую тестовый токен.", parse_mode="HTML")
         
-        success, result = create_clone_directly(test_token)
+        success, result = create_simple_clone(test_token)
         
         if success:
-            await message.answer(f"✅ <b>Тест успешен!</b>\n\n{result}", parse_mode="HTML")
+            message_text, reply_markup = result
+            await message.answer(message_text, reply_markup=reply_markup)
         else:
             await message.answer(f"❌ <b>Тест не удался:</b>\n\n{result}", parse_mode="HTML")
             
@@ -624,7 +797,7 @@ async def clones_list_command(message: types.Message):
     clones_list = get_clones_list()
     
     await message.answer(
-        f"📋 <b>Список клонов:</b>\n\n{clones_list}",
+        clones_list,
         parse_mode="HTML"
     )
 
@@ -706,12 +879,9 @@ async def debug_main_handler(message: types.Message):
     except Exception as e:
         info_lines.append(f"❌ Ошибка проверки файлов: {e}")
     
-    # 5. Режим работы
-    info_lines.append(f"<b>Режим работы:</b> Polling")
-    
-    # 6. Клоны
+    # 5. Клоны
     clones_list = get_clones_list()
-    info_lines.append(f"<b>Активные клоны:</b>\n{clones_list}")
+    info_lines.append(f"<b>Клоны:</b>\n{clones_list}")
     
     # Отправляем информацию
     await message.answer("\n\n".join(info_lines), parse_mode="HTML")
@@ -728,7 +898,7 @@ async def status(message: types.Message):
         f"🎉 <b>Основной бот работает!</b>\n\n"
         f"🔑 Токен: {BOT_TOKEN[:10]}...\n"
         f"🔧 Режим: <b>Polling</b>\n\n"
-        f"📊 Статус клонов:\n{clones_list}\n\n"
+        f"📊 Клоны:\n{clones_list}\n\n"
         f"💡 <b>Рекомендация:</b>\n"
         f"Создайте хотя бы одного резервного клона.",
         parse_mode="HTML"
@@ -791,7 +961,7 @@ async def callback_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
     if action == "menu":
-        # ============ ДОБАВЛЕНА КАПЧА ПРИ ПЕРЕХОДЕ В МЕНЮ ============
+        # ============ ДОБАВЛЕНА КАПЧА ПРИ ПЕРЕХОДЕ В МЕНУ ============
         if requires_captcha(user_id):
             question, answer = generate_captcha()
             captcha_storage[user_id] = {
@@ -966,27 +1136,30 @@ async def message_handler(message: types.Message):
             success, result = create_clone_via_manager(token)
             
             if success:
-                await message.answer(
-                    f"✅ <b>Резервный клон создан и запущен!</b>\n\n"
-                    f"{result}\n\n"
-                    f"Теперь этот бот:\n"
-                    f"1. Работает независимо\n"
-                    f"2. Может стать основным при вашем падении\n"
-                    f"3. Имеет полный функционал\n\n"
-                    f"Сохраните токен в надёжном месте!",
-                    parse_mode="HTML",
-                    reply_markup=main_menu
-                )
+                if isinstance(result, tuple) and len(result) == 2:
+                    # Новый формат с кнопкой
+                    message_text, reply_markup = result
+                    await message.answer(
+                        message_text,
+                        reply_markup=reply_markup
+                    )
+                else:
+                    # Старый формат для обратной совместимости
+                    await message.answer(
+                        f"✅ Резервный клон создан и запущен!\n\n{result}",
+                        parse_mode="HTML",
+                        reply_markup=main_menu
+                    )
                 logging.info(f"✅ Создан резервный клон: {token[:10]}...")
             else:
                 await message.answer(
                     f"❌ <b>Ошибка при создании клона:</b>\n\n"
-                    f"<code>{result[:500]}</code>\n\n"
+                    f"{result}\n\n"
                     f"<b>Что проверить:</b>\n"
                     f"1. Корректность токена\n"
                     f"2. Наличие прав для создания процессов\n"
                     f"3. Доступ к директории /var/www/imlerih_bot/clones\n"
-                    f"4. Доступ к /var/www/imlerih_bot/logs/ для создания логов",
+                    f"4. Установлен ли aiogram в системе",
                     parse_mode="HTML",
                     reply_markup=main_menu
                 )
