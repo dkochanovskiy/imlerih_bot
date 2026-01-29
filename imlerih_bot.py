@@ -470,12 +470,39 @@ async def callback_handler(callback: types.CallbackQuery):
     action = callback.data
     logging.info(f"🔘 Основной бот: нажата кнопка '{action}'")
 
+    user_id = callback.from_user.id
+    
     if action == "menu":
+        # ============ ДОБАВЛЕНА КАПЧА ПРИ ПЕРЕХОДЕ В МЕНЮ ============
+        if requires_captcha(user_id):
+            question, answer = generate_captcha()
+            captcha_storage[user_id] = {
+                "answer": answer,
+                "timestamp": time.time()
+            }
+            
+            # Отправляем капчу отдельным сообщением
+            await bot.send_message(
+                user_id,
+                f"🔒 <b>Проверка безопасности</b>\n\n"
+                f"Решите простой пример, чтобы открыть меню:\n"
+                f"<b>{question} = ?</b>\n\n"
+                f"Ответьте числом в чат.",
+                parse_mode="HTML"
+            )
+            await callback.answer("Требуется проверка безопасности")
+            return
+        
+        # Если капча не требуется, показываем меню
         await callback.message.edit_text("Меню", reply_markup=main_menu)
+        await callback.answer()
+        
     elif action == "back_to_welcome":
         text = get_message_by_id("welcome")
         extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n<b>Режим работы: Polling</b>"
         await callback.message.edit_text(text + extra_text, reply_markup=menu_button, parse_mode="HTML")
+        await callback.answer()
+        
     elif action == "profile":
         # Проверяем, создавал ли этот бот клонов
         has_created = has_created_clones()
@@ -488,10 +515,14 @@ async def callback_handler(callback: types.CallbackQuery):
         full_text = f"{text}\n\nСтатус клона: {status_emoji}"
         
         await callback.message.edit_text(full_text, reply_markup=back_button)
+        await callback.answer()
+        
     elif action == "clone":
         text = get_message_by_id("clone")
         extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона для надёжности."
         await callback.message.edit_text(text + extra_text, reply_markup=clone_menu, parse_mode="HTML")
+        await callback.answer()
+        
     elif action == "create_clone":
         # Проверка на спам перед созданием клона
         user_id = callback.from_user.id
@@ -510,12 +541,15 @@ async def callback_handler(callback: types.CallbackQuery):
                 parse_mode="HTML",
                 reply_markup=create_bot_menu
             )
+            await callback.answer("Требуется проверка безопасности")
             return
         
         text = get_message_by_id("guide_create_clone")
         full_text = text + "\n\n📝 <b>Создание резервного клона</b>\n\nОтправьте мне токен нового бота."
         await callback.message.edit_text(full_text, reply_markup=create_bot_menu, parse_mode="HTML")
         waiting_for_token_main.add(callback.from_user.id)
+        await callback.answer()
+        
     elif action == "system_status":
         clones_list = get_clones_list()
         await callback.message.edit_text(
@@ -525,14 +559,19 @@ async def callback_handler(callback: types.CallbackQuery):
             reply_markup=back_button,
             parse_mode="HTML"
         )
+        await callback.answer()
+        
     elif action == "place_order":
         text = get_message_by_id("place_order")
         await callback.message.edit_text(text, reply_markup=back_button)
+        await callback.answer()
+        
     elif action == "manager":
         text = get_message_by_id("manager")
         await callback.message.edit_text(text, reply_markup=back_button)
-
-    await callback.answer()
+        await callback.answer()
+    
+    # Убираем await callback.answer() из общего места, так как он уже вызывается в каждом условии
 
 @dp.message()
 async def message_handler(message: types.Message):
@@ -557,6 +596,9 @@ async def message_handler(message: types.Message):
                 # Если пользователь ждал токена, продолжаем этот процесс
                 if user_id in waiting_for_token_main:
                     await message.answer("Теперь отправьте токен бота.")
+                else:
+                    # Если пользователь решал капчу для входа в меню, показываем меню
+                    await message.answer("Меню", reply_markup=main_menu)
                 return
             else:
                 # Неверный ответ - генерируем новую капчу
