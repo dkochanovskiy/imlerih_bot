@@ -16,6 +16,26 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import psycopg2
 from psycopg2.extras import DictCursor
 
+# =========== SYSTEMD SOCKET ACTIVATION ===========
+import socket
+import sys
+
+def check_port_in_use(port=8080):
+    """Проверка, занят ли порт (для совместимости)"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(('127.0.0.1', port))
+        sock.close()
+        return result == 0
+    except:
+        return False
+
+# Проверяем, не запущен ли уже бот
+if check_port_in_use():
+    print("⚠️ Порт 8080 занят. Возможно, бот уже запущен.")
+    # Можно выйти или продолжить в polling режиме
+
 # ==================== НАСТРОЙКИ ====================
 
 # Токен из файла
