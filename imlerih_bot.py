@@ -8,6 +8,9 @@ import json
 import os
 import random
 import time
+import re
+import shutil
+import signal
 from collections import defaultdict
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -54,6 +57,7 @@ dp = Dispatcher(storage=MemoryStorage())
 STATE_FILE = "/var/www/imlerih_bot/clone_state.json"
 BACKUP_TOKENS_FILE = "/var/www/imlerih_bot/backup_tokens.json"
 OWNER_CLONES_FILE = "/var/www/imlerih_bot/owner_clones.json"  # Новый файл для связи владелец-клоны
+CLONE_PROCESSES_FILE = "/var/www/imlerih_bot/clone_processes.json"  # Файл для хранения PID клонов
 
 # ========= ЗАЩИТА ОТ СПАМА ========
 
@@ -148,7 +152,6 @@ menu_button = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="
 main_menu = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Профиль", callback_data="profile"), InlineKeyboardButton(text="Клон бота - защита", callback_data="clone")],
     [InlineKeyboardButton(text="Оформить заказ", callback_data="place_order"), InlineKeyboardButton(text="Менеджер", callback_data="manager")],
-    [InlineKeyboardButton(text="Статус системы", callback_data="system_status")],
     [InlineKeyboardButton(text="Назад", callback_data="back_to_welcome")]
 ])
 back_button = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]])
@@ -182,8 +185,26 @@ def get_message_by_id(message_id: str) -> str:
 
 # Проверка формата токена
 def is_valid_token(token: str) -> bool:
-    import re
-    return re.match(r"^\d+:[A-Za-z0-9_-]{35,}$", token) is not None
+    """Проверка формата токена телеграм бота"""
+    if not token or ':' not in token:
+        return False
+    
+    # Упрощенная проверка формата токена
+    parts = token.split(':')
+    if len(parts) != 2:
+        return False
+    
+    bot_id, bot_secret = parts
+    
+    # Проверяем ID бота (должен быть числом)
+    if not bot_id.isdigit():
+        return False
+    
+    # Проверяем длину секрета (обычно 35 символов)
+    if len(bot_secret) < 30 or len(bot_secret) > 50:
+        return False
+    
+    return True
 
 def save_owner_clone_info(clone_token: str):
     """Сохранение информации о том, что текущий бот создал клона"""
@@ -248,25 +269,234 @@ def save_backup_token(token: str):
         logging.error(f"❌ Ошибка сохранения токена: {e}")
     return False
 
-def create_clone_via_manager(token: str) -> tuple[bool, str]:
-    """Создание резервного клона"""
+def save_clone_process_info(clone_id: str, pid: int, token: str):
+    """Сохранение информации о процессе клона"""
     try:
+        if os.path.exists(CLONE_PROCESSES_FILE):
+            with open(CLONE_PROCESSES_FILE, 'r') as f:
+                processes = json.load(f)
+        else:
+            processes = {}
+        
+        processes[clone_id] = {
+            "pid": pid,
+            "token": token[:10] + "...",
+            "start_time": time.time(),
+            "status": "running"
+        }
+        
+        with open(CLONE_PROCESSES_FILE, 'w') as f:
+            json.dump(processes, f, indent=2)
+        
+        logging.info(f"✅ Сохранена информация о процессе клона {clone_id}: PID={pid}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Ошибка сохранения информации о процессе: {e}")
+        return False
+
+def create_clone_directly(token: str) -> tuple[bool, str]:
+    """Создание резервного клона напрямую как фоновый процесс"""
+    try:
+        logging.info(f"🔄 Начинаю создание клона с токеном: {token[:10]}...")
+        
+        # 1. Создаем уникальный ID для клона
+        clone_id = f"clone_{int(time.time())}_{random.randint(1000, 9999)}"
+        logging.info(f"✅ Создан ID клона: {clone_id}")
+        
+        # 2. Создаем простой скрипт клона
+        clone_script = f"""#!/usr/bin/env python3
+# Клон бота {clone_id}
+
+import asyncio
+import logging
+import sys
+import os
+import signal
+import time
+
+# Добавляем путь для импортов
+sys.path.insert(0, '/var/www/imlerih_bot')
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+
+# Токен клона
+BOT_TOKEN = "{token}"
+
+# Настройка логирования
+log_file = f"/var/www/imlerih_bot/logs/clone_{{clone_id}}.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logger = logging.getLogger(__name__)
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+@dp.message(Command("start"))
+async def start_handler(message: types.Message):
+    await message.answer(f"🤖 Я резервный клон! ID: {clone_id}\\nТокен: {token[:10]}...")
+
+@dp.message(Command("status"))
+async def status_handler(message: types.Message):
+    await message.answer(f"✅ Резервный клон работает!\\nID: {clone_id}\\nЗапущен: {time.ctime()}")
+
+@dp.message(Command("ping"))
+async def ping_handler(message: types.Message):
+    await message.answer(f"🏓 Pong! Клон {clone_id} жив")
+
+async def main():
+    try:
+        logger.info(f"🚀 Запуск резервного клона {{clone_id}}...")
+        logger.info(f"🔑 Токен: {token[:10]}...")
+        
+        # Удаляем вебхук если был
+        await bot.delete_webhook(drop_pending_updates=True)
+        
+        logger.info("🔄 Запуск polling...")
+        await dp.start_polling(bot)
+        
+    except asyncio.CancelledError:
+        logger.info("⛔ Получен сигнал остановки")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в клоне: {{e}}")
+        raise
+    finally:
+        logger.info(f"👋 Остановка клона {{clone_id}}")
+        await bot.session.close()
+
+def signal_handler(signum, frame):
+    logger.info(f"📶 Получен сигнал {{signum}}, останавливаюсь...")
+    raise asyncio.CancelledError
+
+if __name__ == "__main__":
+    # Регистрируем обработчики сигналов
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Запускаем бота
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("👆 Остановка по Ctrl+C")
+    except Exception as e:
+        logger.error(f"💥 Критическая ошибка: {{e}}")
+        sys.exit(1)
+"""
+        
+        # 3. Сохраняем скрипт клона во временную директорию
+        script_filename = f"/var/www/imlerih_bot/clones/bot_{clone_id}.py"
+        
+        # Создаем директорию если её нет
+        os.makedirs("/var/www/imlerih_bot/clones", exist_ok=True)
+        
+        with open(script_filename, 'w') as f:
+            f.write(clone_script)
+        
+        # 4. Даем права на выполнение
+        os.chmod(script_filename, 0o755)
+        logging.info(f"✅ Создан скрипт клона: {script_filename}")
+        
+        # 5. Запускаем клон как фоновый процесс
+        log_file = f"/var/www/imlerih_bot/logs/clone_{clone_id}.log"
+        
+        # Используем nohup для запуска в фоне
+        cmd = f"nohup python3 {script_filename} > {log_file} 2>&1 & echo $!"
+        
+        logging.info(f"🚀 Запускаю команду: {cmd}")
+        
+        # Запускаем процесс
         result = subprocess.run(
-            ["python3", "/var/www/imlerih_bot/clone_manager.py", "create", token],
+            cmd,
+            shell=True,
             capture_output=True,
-            text=True,
-            timeout=30
+            text=True
         )
         
-        if result.returncode == 0:
+        if result.returncode == 0 and result.stdout.strip():
+            pid = int(result.stdout.strip())
+            logging.info(f"✅ Клон {clone_id} запущен с PID: {pid}")
+            
+            # Сохраняем информацию о процессе
+            save_clone_process_info(clone_id, pid, token)
+            
+            # 6. Ждем немного и проверяем, запустился ли процесс
+            time.sleep(2)
+            
+            # Проверяем, жив ли процесс
+            try:
+                os.kill(pid, 0)  # Проверка существования процесса
+                process_running = True
+            except OSError:
+                process_running = False
+                logging.warning(f"⚠️ Процесс {pid} не запущен после ожидания")
+            
+            # 7. Проверяем лог файл на наличие ошибок
+            log_content = ""
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    log_content = f.read(1000)  # Читаем первые 1000 символов
+            
+            # 8. Сохраняем токен
             save_backup_token(token)
-            return True, result.stdout
+            
+            if process_running:
+                return True, f"✅ Резервный клон создан и запущен!\nID: {clone_id}\nPID: {pid}\nЛог: {log_file}\nСтатус: {'🟢 Запущен' if process_running else '🔴 Не запущен'}\n\nПервые строки лога:\n{log_content[:500]}"
+            else:
+                return False, f"⚠️ Клон создан, но возможно не запустился\nID: {clone_id}\nPID: {pid}\nПроверьте лог: {log_file}"
+        
         else:
-            return False, result.stderr
+            error_msg = result.stderr if result.stderr else "Неизвестная ошибка"
+            logging.error(f"❌ Ошибка запуска клона: {error_msg}")
+            return False, f"Ошибка запуска клона: {error_msg}"
+        
+    except Exception as e:
+        logging.error(f"❌ Исключение при создании клона: {e}")
+        return False, f"Исключение при создании клона: {str(e)}"
+
+def create_clone_via_manager(token: str) -> tuple[bool, str]:
+    """Создание резервного клона через менеджер или напрямую"""
+    try:
+        manager_path = "/var/www/imlerih_bot/clone_manager.py"
+        
+        if os.path.exists(manager_path):
+            # Используем менеджер клонов
+            logging.info(f"🔄 Использую менеджер клонов для создания клона")
+            
+            result = subprocess.run(
+                ["python3", manager_path, "create", token],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd="/var/www/imlerih_bot"
+            )
+            
+            logging.info(f"📊 Результат менеджера:\nКод: {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
+            
+            if result.returncode == 0:
+                save_backup_token(token)
+                return True, f"✅ Клон создан через менеджер\n{result.stdout}"
+            else:
+                # Если менеджер не сработал, пробуем напрямую
+                logging.warning("⚠️ Менеджер клонов вернул ошибку, пробую создать напрямую")
+                return create_clone_directly(token)
+        else:
+            # Менеджера нет, создаем напрямую
+            logging.info("⚠️ Менеджер клонов не найден, создаю клон напрямую")
+            return create_clone_directly(token)
+            
     except subprocess.TimeoutExpired:
+        logging.error("⏰ Таймаут при создании клона")
         return False, "Таймаут при создании клона"
     except Exception as e:
-        return False, str(e)
+        logging.error(f"❌ Исключение при создании клона: {e}")
+        return False, f"Исключение: {str(e)}"
 
 def has_clones() -> bool:
     """Проверяет, есть ли созданные клон-боты (глобально)"""
@@ -283,18 +513,52 @@ def has_clones() -> bool:
 def get_clones_list() -> str:
     """Получение списка всех клонов"""
     try:
-        result = subprocess.run(
-            ["python3", "/var/www/imlerih_bot/clone_manager.py", "list"],
-            capture_output=True,
-            text=True
-        )
+        # Проверяем активные процессы клонов
+        output_lines = []
         
-        if result.returncode == 0:
-            return result.stdout
-        else:
-            return f"Ошибка получения списка: {result.stderr}"
+        # Проверяем файл с процессами
+        if os.path.exists(CLONE_PROCESSES_FILE):
+            with open(CLONE_PROCESSES_FILE, 'r') as f:
+                processes = json.load(f)
+            
+            for clone_id, info in processes.items():
+                pid = info.get("pid", 0)
+                status = info.get("status", "unknown")
+                token_preview = info.get("token", "unknown")
+                
+                # Проверяем, жив ли процесс
+                try:
+                    os.kill(pid, 0)
+                    process_status = "🟢 Запущен"
+                except OSError:
+                    process_status = "🔴 Остановлен"
+                
+                output_lines.append(f"• {clone_id}: PID={pid}, {process_status}, токен={token_preview}")
+        
+        # Проверяем процессы через ps
+        try:
+            result = subprocess.run(
+                ["ps", "aux", "|", "grep", "bot_clone_", "|", "grep", "-v", "grep"],
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.stdout:
+                output_lines.append("\n📊 Активные процессы:")
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        output_lines.append(f"  {line[:100]}")
+        except Exception as e:
+            output_lines.append(f"\n⚠️ Ошибка проверки процессов: {e}")
+        
+        if not output_lines:
+            return "📭 Активные клоны не найдены"
+        
+        return "\n".join(output_lines)
+        
     except Exception as e:
-        return f"Ошибка: {str(e)}"
+        return f"❌ Ошибка получения списка: {str(e)}"
 
 # Глобальное состояние
 waiting_for_token_main = set()
@@ -309,7 +573,9 @@ async def help_command(message: types.Message):
         "/captcha — пройти тест капчи\n"
         "/status — статус системы (только админ)\n"
         "/debug_main — диагностика (только админ)\n"
-        "/polling_info — информация о polling-режиме"
+        "/polling_info — информация о polling-режиме\n"
+        "/test_clone — тест создания клона (только админ)\n"
+        "/clones_list — список клонов (только админ)"
     )
 
 @dp.message(Command("start"))
@@ -324,6 +590,43 @@ async def start_handler(message: types.Message):
     extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n<b>Режим работы: Polling</b>"
     
     await message.answer(text + extra_text, reply_markup=menu_button, parse_mode="HTML")
+
+@dp.message(Command("test_clone"))
+async def test_clone_command(message: types.Message):
+    """Тест создания клона (только для админа)"""
+    if message.from_user.id != 291178183:
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    try:
+        # Используем тестовый токен (нужно заменить на реальный для теста)
+        test_token = "1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890"
+        
+        await message.answer("🧪 <b>Тест создания клона...</b>\nИспользую тестовый токен.", parse_mode="HTML")
+        
+        success, result = create_clone_directly(test_token)
+        
+        if success:
+            await message.answer(f"✅ <b>Тест успешен!</b>\n\n{result}", parse_mode="HTML")
+        else:
+            await message.answer(f"❌ <b>Тест не удался:</b>\n\n{result}", parse_mode="HTML")
+            
+    except Exception as e:
+        await message.answer(f"❌ <b>Ошибка теста:</b>\n\n{str(e)}", parse_mode="HTML")
+
+@dp.message(Command("clones_list"))
+async def clones_list_command(message: types.Message):
+    """Список всех клонов (только для админа)"""
+    if message.from_user.id != 291178183:
+        await message.answer("❌ Доступ запрещён")
+        return
+    
+    clones_list = get_clones_list()
+    
+    await message.answer(
+        f"📋 <b>Список клонов:</b>\n\n{clones_list}",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("captcha"))
 async def captcha_command(message: types.Message):
@@ -369,14 +672,14 @@ async def debug_main_handler(message: types.Message):
             capture_output=True,
             text=True
         )
-        info_lines.append(f"<b>Systemd статус:</b>\n<pre>{result.stdout[:500]}</pre>")
+        info_lines.append(f"<b>Systemd статус основного бота:</b>\n<pre>{result.stdout[:500]}</pre>")
     except Exception as e:
         info_lines.append(f"❌ Systemd ошибка: {e}")
     
     # 2. Процессы
     try:
         result = subprocess.run(
-            ["ps", "aux", "|", "grep", "imlerih_bot.py", "|", "grep", "-v", "grep"],
+            ["ps", "aux", "|", "grep", "imlerih_bot", "|", "grep", "-v", "grep"],
             shell=True,
             capture_output=True,
             text=True
@@ -393,8 +696,22 @@ async def debug_main_handler(message: types.Message):
     active_users = len(user_activity)
     info_lines.append(f"<b>Защита от спама:</b>\nАктивных капч: {active_captchas}\nОтслеживаемых пользователей: {active_users}")
     
-    # 4. Режим работы
+    # 4. Проверка файлов
+    try:
+        manager_exists = os.path.exists("/var/www/imlerih_bot/clone_manager.py")
+        token_exists = os.path.exists("/var/www/imlerih_bot/txt/token.txt")
+        clones_dir_exists = os.path.exists("/var/www/imlerih_bot/clones")
+        processes_file_exists = os.path.exists(CLONE_PROCESSES_FILE)
+        info_lines.append(f"<b>Файлы:</b>\nМенеджер: {'✅' if manager_exists else '❌'}\nТокен: {'✅' if token_exists else '❌'}\nДиректория клонов: {'✅' if clones_dir_exists else '❌'}\nФайл процессов: {'✅' if processes_file_exists else '❌'}")
+    except Exception as e:
+        info_lines.append(f"❌ Ошибка проверки файлов: {e}")
+    
+    # 5. Режим работы
     info_lines.append(f"<b>Режим работы:</b> Polling")
+    
+    # 6. Клоны
+    clones_list = get_clones_list()
+    info_lines.append(f"<b>Активные клоны:</b>\n{clones_list}")
     
     # Отправляем информацию
     await message.answer("\n\n".join(info_lines), parse_mode="HTML")
@@ -460,7 +777,8 @@ async def create_backup(message: types.Message):
         "Резервный клон:\n"
         "• Будет работать независимо\n"
         "• Сможет стать основным при вашем падении\n"
-        "• Имеет полный функционал",
+        "• Имеет полный функционал\n\n"
+        "Пример токена:\n<code>1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890</code>",
         parse_mode="HTML"
     )
     waiting_for_token_main.add(message.from_user.id)
@@ -545,7 +863,7 @@ async def callback_handler(callback: types.CallbackQuery):
             return
         
         text = get_message_by_id("guide_create_clone")
-        full_text = text + "\n\n📝 <b>Создание резервного клона</b>\n\nОтправьте мне токен нового бота."
+        full_text = text + "\n\n📝 <b>Создание резервного клона</b>\n\nОтправьте мне токен нового бота.\n\nПример токена:\n<code>1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890</code>"
         await callback.message.edit_text(full_text, reply_markup=create_bot_menu, parse_mode="HTML")
         waiting_for_token_main.add(callback.from_user.id)
         await callback.answer()
@@ -570,8 +888,6 @@ async def callback_handler(callback: types.CallbackQuery):
         text = get_message_by_id("manager")
         await callback.message.edit_text(text, reply_markup=back_button)
         await callback.answer()
-    
-    # Убираем await callback.answer() из общего места, так как он уже вызывается в каждом условии
 
 @dp.message()
 async def message_handler(message: types.Message):
@@ -644,26 +960,45 @@ async def message_handler(message: types.Message):
         waiting_for_token_main.discard(user_id)
         
         if is_valid_token(token):
+            # Показываем сообщение о начале создания клона
+            await message.answer("🔄 Создаю резервного клона... Пожалуйста, подождите (это может занять до 60 секунд).", parse_mode="HTML")
+            
             success, result = create_clone_via_manager(token)
             
             if success:
                 await message.answer(
-                    "✅ <b>Резервный клон создан и запущен!</b>\n\n"
-                    "Теперь этот бот:\n"
-                    "1. Работает независимо\n"
-                    "2. Может стать основным при вашем падении\n"
-                    "3. Имеет полный функционал\n\n"
-                    "Сохраните токен в надёжном месте!",
+                    f"✅ <b>Резервный клон создан и запущен!</b>\n\n"
+                    f"{result}\n\n"
+                    f"Теперь этот бот:\n"
+                    f"1. Работает независимо\n"
+                    f"2. Может стать основным при вашем падении\n"
+                    f"3. Имеет полный функционал\n\n"
+                    f"Сохраните токен в надёжном месте!",
                     parse_mode="HTML",
                     reply_markup=main_menu
                 )
                 logging.info(f"✅ Создан резервный клон: {token[:10]}...")
             else:
-                await message.answer(f"❌ Ошибка при создании клона:\n{result}", reply_markup=main_menu)
+                await message.answer(
+                    f"❌ <b>Ошибка при создании клона:</b>\n\n"
+                    f"<code>{result[:500]}</code>\n\n"
+                    f"<b>Что проверить:</b>\n"
+                    f"1. Корректность токена\n"
+                    f"2. Наличие прав для создания процессов\n"
+                    f"3. Доступ к директории /var/www/imlerih_bot/clones\n"
+                    f"4. Доступ к /var/www/imlerih_bot/logs/ для создания логов",
+                    parse_mode="HTML",
+                    reply_markup=main_menu
+                )
         else:
             await message.answer(
-                "❌ Неверный формат токена.\n\n"
-                "Пример:\n<code>123456:ABCdefGHIjklmNoPQRsTUVwxyZ</code>",
+                "❌ <b>Неверный формат токена.</b>\n\n"
+                "Токен должен иметь формат:\n"
+                "<code>1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890</code>\n\n"
+                "Где:\n"
+                "• Первая часть: цифровой ID бота (8-11 цифр)\n"
+                "• Вторая часть: секретный ключ (30-50 символов)\n"
+                "• Разделитель: двоеточие",
                 parse_mode="HTML",
                 reply_markup=main_menu
             )
@@ -673,6 +1008,12 @@ async def message_handler(message: types.Message):
 async def main():
     """Основная функция запуска в polling-режиме"""
     try:
+        # Создаем необходимые директории если их нет
+        os.makedirs("/var/www/imlerih_bot/clones", exist_ok=True)
+        os.makedirs("/var/www/imlerih_bot/logs", exist_ok=True)
+        
+        logging.info("✅ Проверены/созданы необходимые директории")
+        
         # Удаляем вебхук, если был установлен ранее
         await bot.delete_webhook(drop_pending_updates=True)
         logging.info("🗑️ Вебхук удален (если был)")
