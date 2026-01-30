@@ -20,29 +20,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import psycopg2
 from psycopg2.extras import DictCursor
 
-# =========== SYSTEMD SOCKET ACTIVATION ===========
-import socket
-import sys
-
-def check_port_in_use(port=8080):
-    """Проверка, занят ли порт (для совместимости)"""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)
-        result = sock.connect_ex(('127.0.0.1', port))
-        sock.close()
-        return result == 0
-    except:
-        return False
-
-# Проверяем, не запущен ли уже бот
-if check_port_in_use():
-    print("⚠️ Порт 8080 занят. Возможно, бот уже запущен.")
-    # Можно выйти или продолжить в polling режиме
-
 # ==================== НАСТРОЙКИ ====================
 
-# Токен из файла
 try:
     with open("/var/www/imlerih_bot/txt/token.txt", "r", encoding="utf-8") as f:
         BOT_TOKEN = f.read().strip()
@@ -137,20 +116,16 @@ def cleanup_old_captchas():
 
 # Очистка старой активности пользователей
 def cleanup_old_activity():
-    """Удаляет старые записи активности"""
     current_time = time.time()
     for user_id in list(user_activity.keys()):
-        # Оставляем только записи за последнюю минуту
         user_activity[user_id] = [t for t in user_activity[user_id] 
                                  if current_time - t < 60]
-        # Если список пуст, удаляем пользователя
         if not user_activity[user_id]:
             user_activity.pop(user_id, None)
 
 # ========== ФУНКЦИЯ ДЛЯ ГЕНЕРАЦИИ ССЫЛКИ НА КЛОНА ==========
 
 def get_bot_username(token: str) -> str:
-    """Получает username бота через Telegram API"""
     try:
         url = f"https://api.telegram.org/bot{token}/getMe"
         response = requests.get(url, timeout=10)
@@ -183,13 +158,10 @@ def get_bot_username(token: str) -> str:
         return None
 
 def generate_clone_link(token: str) -> str:
-    """Генерирует корректную ссылку для открытия созданного клона-бота"""
     try:
-        # Получаем username бота через API
         username = get_bot_username(token)
         
         if username:
-            # Формируем правильную ссылку на бота с username
             bot_link = f"https://t.me/{username}"
             logging.info(f"✅ Сгенерирована ссылка на бота: {bot_link}")
             return bot_link
@@ -216,7 +188,11 @@ clone_menu = InlineKeyboardMarkup(inline_keyboard=[
 ])
 create_bot_menu = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="clone")]])
 
-# Подключение к PostgreSQL
+clone_success_menu = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="🔗 Открыть клона", callback_data="open_clone")],
+    [InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]
+])
+
 def get_db_connection():
     return psycopg2.connect(
         host="localhost",
@@ -225,7 +201,6 @@ def get_db_connection():
         password="karantir_pass"
     )
 
-# Получение текста из БД
 def get_message_by_id(message_id: str) -> str:
     try:
         conn = get_db_connection()
@@ -238,24 +213,20 @@ def get_message_by_id(message_id: str) -> str:
         logging.error(f"❌ Ошибка при запросе к БД: {e}")
         return "Ошибка загрузки текста."
 
-# Проверка формата токена
 def is_valid_token(token: str) -> bool:
     """Проверка формата токена телеграм бота"""
     if not token or ':' not in token:
         return False
     
-    # Упрощенная проверка формата токена
     parts = token.split(':')
     if len(parts) != 2:
         return False
     
     bot_id, bot_secret = parts
     
-    # Проверяем ID бота (должен быть числом)
     if not bot_id.isdigit():
         return False
     
-    # Проверяем длину секрета (обычно 35 символов)
     if len(bot_secret) < 30 or len(bot_secret) > 50:
         return False
     
@@ -264,14 +235,12 @@ def is_valid_token(token: str) -> bool:
 def save_owner_clone_info(clone_token: str):
     """Сохранение информации о том, что текущий бот создал клона"""
     try:
-        # Загружаем существующие данные
         if os.path.exists(OWNER_CLONES_FILE):
             with open(OWNER_CLONES_FILE, 'r') as f:
                 owner_data = json.load(f)
         else:
             owner_data = {}
         
-        # Добавляем клон к списку созданных текущим ботом
         owner_token = BOT_TOKEN
         if owner_token not in owner_data:
             owner_data[owner_token] = []
@@ -286,25 +255,7 @@ def save_owner_clone_info(clone_token: str):
         logging.error(f"❌ Ошибка сохранения информации о владельце: {e}")
     return False
 
-def has_created_clones() -> bool:
-    """Проверяет, создавал ли текущий бот клонов"""
-    try:
-        if os.path.exists(OWNER_CLONES_FILE):
-            with open(OWNER_CLONES_FILE, 'r') as f:
-                owner_data = json.load(f)
-            
-            # Проверяем, есть ли запись для текущего бота
-            owner_token = BOT_TOKEN
-            if owner_token in owner_data:
-                clones = owner_data[owner_token]
-                return len(clones) > 0
-        return False
-    except Exception as e:
-        logging.error(f"❌ Ошибка проверки созданных клонов: {e}")
-        return False
-
 def save_backup_token(token: str):
-    """Сохранение токена в список резервных"""
     try:
         tokens = []
         if os.path.exists(BACKUP_TOKENS_FILE):
@@ -575,16 +526,22 @@ if __name__ == "__main__":
                 message_text = f"✅ Резервный клон создан и запущен!"
                 
                 if bot_link:
-                    # Создаем кнопку со ссылкой
+                    # Создаем кнопку со ссылкой И кнопку Назад
                     open_clone_button = InlineKeyboardMarkup(
-                        inline_keyboard=[[
-                            InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)
-                        ]]
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)],
+                            [InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]
+                        ]
                     )
                     return True, (message_text, open_clone_button)
                 else:
-                    # Если не удалось получить username, все равно возвращаем успех
-                    return True, (message_text, None)
+                    # Если не удалось получить username, все равно возвращаем успех с кнопкой Назад
+                    open_clone_button = InlineKeyboardMarkup(
+                        inline_keyboard=[[
+                            InlineKeyboardButton(text="◀️ Назад в меню", callback_data="menu")
+                        ]]
+                    )
+                    return True, (message_text, open_clone_button)
                     
             elif has_errors:
                 return False, (
@@ -613,57 +570,22 @@ if __name__ == "__main__":
         logging.error(f"❌ Исключение при создании клона: {e}")
         return False, f"❌ Исключение при создании клона: {str(e)}"
 
-def create_clone_via_manager(token: str) -> tuple[bool, str]:
-    """Создание резервного клона через менеджер или напрямую"""
+def has_created_clones() -> bool:
+    """Проверяет, создавал ли текущий бот клонов"""
     try:
-        manager_path = "/var/www/imlerih_bot/clone_manager.py"
-        
-        if os.path.exists(manager_path):
-            # Используем менеджер клонов
-            logging.info(f"🔄 Использую менеджер клонов для создания клона")
+        if os.path.exists(OWNER_CLONES_FILE):
+            with open(OWNER_CLONES_FILE, 'r') as f:
+                owner_data = json.load(f)
             
-            result = subprocess.run(
-                ["python3", manager_path, "create", token],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                cwd="/var/www/imlerih_bot"
-            )
-            
-            logging.info(f"📊 Результат менеджера:\nКод: {result.returncode}\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}")
-            
-            if result.returncode == 0:
-                save_backup_token(token)
-                
-                # Генерируем ссылку на бота
-                bot_link = generate_clone_link(token)
-                message_text = f"✅ Резервный клон создан и запущен!"
-                
-                if bot_link:
-                    # Создаем кнопку со ссылкой
-                    open_clone_button = InlineKeyboardMarkup(
-                        inline_keyboard=[[
-                            InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)
-                        ]]
-                    )
-                    return True, (message_text, open_clone_button)
-                else:
-                    return True, (message_text, None)
-            else:
-                # Если менеджер не сработал, пробуем напрямую
-                logging.warning("⚠️ Менеджер клонов вернул ошибку, пробую создать напрямую")
-                return create_simple_clone(token)
-        else:
-            # Менеджера нет, создаем напрямую
-            logging.info("⚠️ Менеджер клонов не найден, создаю клон напрямую")
-            return create_simple_clone(token)
-            
-    except subprocess.TimeoutExpired:
-        logging.error("⏰ Таймаут при создании клона")
-        return False, "Таймаут при создании клона"
+            # Проверяем, есть ли запись для текущего бота
+            owner_token = BOT_TOKEN
+            if owner_token in owner_data:
+                clones = owner_data[owner_token]
+                return len(clones) > 0
+        return False
     except Exception as e:
-        logging.error(f"❌ Исключение при создании клона: {e}")
-        return False, f"Исключение: {str(e)}"
+        logging.error(f"❌ Ошибка проверки созданных клонов: {e}")
+        return False
 
 def has_clones() -> bool:
     """Проверяет, есть ли созданные клон-боты (глобально)"""
@@ -737,19 +659,6 @@ waiting_for_token_main = set()
 
 # ============ ОБРАБОТЧИКИ ОСНОВНОГО БОТА ============
 
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
-    await message.answer(
-        "🔧 Доступные команды:\n"
-        "/start — начать\n"
-        "/captcha — пройти тест капчи\n"
-        "/status — статус системы (только админ)\n"
-        "/debug_main — диагностика (только админ)\n"
-        "/polling_info — информация о polling-режиме\n"
-        "/test_clone — тест создания клона (только админ)\n"
-        "/clones_list — список клонов (только админ)"
-    )
-
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     logging.info(f"🎉 Основной бот: /start от {message.from_user.id}")
@@ -759,199 +668,9 @@ async def start_handler(message: types.Message):
     cleanup_old_activity()
     
     text = get_message_by_id("welcome")
-    extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n<b>Режим работы: Polling</b>"
+    extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n"
     
     await message.answer(text + extra_text, reply_markup=menu_button, parse_mode="HTML")
-
-@dp.message(Command("test_clone"))
-async def test_clone_command(message: types.Message):
-    """Тест создания клона (только для админа)"""
-    if message.from_user.id != 291178183:
-        await message.answer("❌ Доступ запрещён")
-        return
-    
-    try:
-        # Используем тестовый токен (нужно заменить на реальный для теста)
-        test_token = "1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890"
-        
-        await message.answer("🧪 <b>Тест создания клона...</b>\nИспользую тестовый токен.", parse_mode="HTML")
-        
-        success, result = create_simple_clone(test_token)
-        
-        if success:
-            message_text, reply_markup = result
-            await message.answer(message_text, reply_markup=reply_markup)
-        else:
-            await message.answer(f"❌ <b>Тест не удался:</b>\n\n{result}", parse_mode="HTML")
-            
-    except Exception as e:
-        await message.answer(f"❌ <b>Ошибка теста:</b>\n\n{str(e)}", parse_mode="HTML")
-
-@dp.message(Command("clones_list"))
-async def clones_list_command(message: types.Message):
-    """Список всех клонов (только для админа)"""
-    if message.from_user.id != 291178183:
-        await message.answer("❌ Доступ запрещён")
-        return
-    
-    clones_list = get_clones_list()
-    
-    await message.answer(
-        clones_list,
-        parse_mode="HTML"
-    )
-
-@dp.message(Command("captcha"))
-async def captcha_command(message: types.Message):
-    """Команда для тестирования капчи (доступна всем)"""
-    logging.info(f"📨 Получена команда /captcha от пользователя {message.from_user.id} ({message.from_user.username})")
-    
-    try:
-        question, answer = generate_captcha()
-        captcha_storage[message.from_user.id] = {
-            "answer": answer,
-            "timestamp": time.time()
-        }
-        
-        logging.info(f"✅ Капча сгенерирована: {question} = {answer}")
-        
-        await message.answer(
-            f"🧪 <b>Тест капчи</b>\n\n"
-            f"Решите простой пример:\n"
-            f"<b>{question} = ?</b>\n\n"
-            f"Ответьте числом.\n\n"
-            f"<i>Эта команда для тестирования защиты от спама.</i>",
-            parse_mode="HTML"
-        )
-        logging.info(f"📤 Ответ отправлен пользователю {message.from_user.id}")
-        
-    except Exception as e:
-        logging.error(f"❌ Ошибка в обработчике /captcha: {e}")
-        await message.answer(f"❌ Произошла ошибка: {str(e)}")
-
-@dp.message(Command("debug_main"))
-async def debug_main_handler(message: types.Message):
-    """Детальная диагностика основного бота"""
-    if message.from_user.id != 291178183:
-        return
-    
-    # Собираем информацию
-    info_lines = []
-    
-    # 1. Systemd (если используется)
-    try:
-        result = subprocess.run(
-            ["systemctl", "status", "imlerih_bot", "--no-pager"],
-            capture_output=True,
-            text=True
-        )
-        info_lines.append(f"<b>Systemd статус основного бота:</b>\n<pre>{result.stdout[:500]}</pre>")
-    except Exception as e:
-        info_lines.append(f"❌ Systemd ошибка: {e}")
-    
-    # 2. Процессы
-    try:
-        result = subprocess.run(
-            ["ps", "aux", "|", "grep", "imlerih_bot", "|", "grep", "-v", "grep"],
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if result.stdout:
-            info_lines.append(f"<b>Процессы:</b>\n<pre>{result.stdout}</pre>")
-        else:
-            info_lines.append("❌ Процессы не найдены")
-    except Exception as e:
-        info_lines.append(f"❌ Ошибка проверки процессов: {e}")
-    
-    # 3. Статус защиты от спама
-    active_captchas = len(captcha_storage)
-    active_users = len(user_activity)
-    info_lines.append(f"<b>Защита от спама:</b>\nАктивных капч: {active_captchas}\nОтслеживаемых пользователей: {active_users}")
-    
-    # 4. Проверка файлов
-    try:
-        manager_exists = os.path.exists("/var/www/imlerih_bot/clone_manager.py")
-        token_exists = os.path.exists("/var/www/imlerih_bot/txt/token.txt")
-        clones_dir_exists = os.path.exists("/var/www/imlerih_bot/clones")
-        processes_file_exists = os.path.exists(CLONE_PROCESSES_FILE)
-        info_lines.append(f"<b>Файлы:</b>\nМенеджер: {'✅' if manager_exists else '❌'}\nТокен: {'✅' if token_exists else '❌'}\nДиректория клонов: {'✅' if clones_dir_exists else '❌'}\nФайл процессов: {'✅' if processes_file_exists else '❌'}")
-    except Exception as e:
-        info_lines.append(f"❌ Ошибка проверки файлов: {e}")
-    
-    # 5. Клоны
-    clones_list = get_clones_list()
-    info_lines.append(f"<b>Клоны:</b>\n{clones_list}")
-    
-    # Отправляем информацию
-    await message.answer("\n\n".join(info_lines), parse_mode="HTML")
-
-@dp.message(Command("status"))
-async def status(message: types.Message):
-    """Статус системы"""
-    if message.from_user.id != 291178183:  # Только для админа
-        return
-    
-    clones_list = get_clones_list()
-    
-    await message.answer(
-        f"🎉 <b>Основной бот работает!</b>\n\n"
-        f"🔑 Токен: {BOT_TOKEN[:10]}...\n"
-        f"🔧 Режим: <b>Polling</b>\n\n"
-        f"📊 Клоны:\n{clones_list}\n\n"
-        f"💡 <b>Рекомендация:</b>\n"
-        f"Создайте хотя бы одного резервного клона.",
-        parse_mode="HTML"
-    )
-
-@dp.message(Command("polling_info"))
-async def polling_info_command(message: types.Message):
-    """Информация о polling-режиме (для админа)"""
-    if message.from_user.id != 291178183:
-        await message.answer("❌ Доступ запрещён")
-        return
-    
-    try:
-        info_text = (
-            f"🔄 <b>Информация о Polling-режиме:</b>\n\n"
-            f"• Режим: <b>Long Polling</b>\n"
-            f"• Сервер: Telegram Bot API\n"
-            f"• Соединение: HTTPS\n"
-            f"• Таймаут запроса: 30 секунд\n\n"
-            f"<i>Преимущества polling-режима:</i>\n"
-            f"• Не требует веб-сервера\n"
-            f"• Не требует статического IP\n"
-            f"• Не требует открытых портов\n"
-            f"• Проще в настройке\n\n"
-            f"<i>Недостатки:</i>\n"
-            f"• Немного медленнее, чем webhook\n"
-            f"• Больше нагрузка на сервер"
-        )
-        
-        await message.answer(info_text, parse_mode="HTML")
-        
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {str(e)}")
-        logging.error(f"Polling info error: {e}")
-
-@dp.message(Command("create_backup"))
-async def create_backup(message: types.Message):
-    """Создать резервного клона (команда)"""
-    if message.from_user.id != 291178183:
-        await message.answer("❌ Доступ запрещён")
-        return
-    
-    await message.answer(
-        "📝 <b>Создание резервного клона</b>\n\n"
-        "Отправьте мне токен нового бота.\n\n"
-        "Резервный клон:\n"
-        "• Будет работать независимо\n"
-        "• Сможет стать основным при вашем падении\n"
-        "• Имеет полный функционал\n\n"
-        "Пример токена:\n<code>1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890</code>",
-        parse_mode="HTML"
-    )
-    waiting_for_token_main.add(message.from_user.id)
 
 @dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery):
@@ -987,7 +706,7 @@ async def callback_handler(callback: types.CallbackQuery):
         
     elif action == "back_to_welcome":
         text = get_message_by_id("welcome")
-        extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n<b>Режим работы: Polling</b>"
+        extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n"
         await callback.message.edit_text(text + extra_text, reply_markup=menu_button, parse_mode="HTML")
         await callback.answer()
         
@@ -1064,12 +783,16 @@ async def message_handler(message: types.Message):
     user_id = message.from_user.id
     text = message.text.strip()
     
+    # ДОБАВЬТЕ ЭТУ СТРОКУ ДЛЯ ОТЛАДКИ
+    print(f"📨 Получено сообщение от {user_id}: {text[:50]}...")
+    
     # Очистка старых данных
     cleanup_old_captchas()
     cleanup_old_activity()
     
     # Проверка на активную капчу
     if user_id in captcha_storage:
+        print(f"🔐 Пользователь {user_id} решает капчу...")  # ДОБАВЬТЕ
         expected_answer = captcha_storage[user_id]["answer"]
         
         try:
@@ -1081,6 +804,7 @@ async def message_handler(message: types.Message):
                 
                 # Если пользователь ждал токена, продолжаем этот процесс
                 if user_id in waiting_for_token_main:
+                    print(f"🔑 Пользователь {user_id} прошел капчу и ждет токен")  # ДОБАВЬТЕ
                     await message.answer("Теперь отправьте токен бота.")
                 else:
                     # Если пользователь решал капчу для входа в меню, показываем меню
@@ -1109,6 +833,7 @@ async def message_handler(message: types.Message):
     
     # Проверка на спам (если нужно)
     if requires_captcha(user_id):
+        print(f"🚨 Пользователь {user_id} требует капчу (спам?)")  # ДОБАВЬТЕ
         question, answer = generate_captcha()
         captcha_storage[user_id] = {
             "answer": answer,
@@ -1126,16 +851,19 @@ async def message_handler(message: types.Message):
     
     # Обработка ожидания токена
     if user_id in waiting_for_token_main:
+        print(f"🎯 Пользователь {user_id} отправил токен для клона: {text[:20]}...")  # ДОБАВЬТЕ
         token = text
         waiting_for_token_main.discard(user_id)
         
         if is_valid_token(token):
+            print(f"✅ Токен валиден, начинаю создание клона...")  # ДОБАВЬТЕ
             # Показываем сообщение о начале создания клона
             await message.answer("🔄 Создаю резервного клона... Пожалуйста, подождите (это может занять до 60 секунд).", parse_mode="HTML")
             
-            success, result = create_clone_via_manager(token)
+            success, result = create_simple_clone(token)
             
             if success:
+                print(f"✅ УСПЕХ: {result}")  # Уже есть
                 if isinstance(result, tuple) and len(result) == 2:
                     # Новый формат с кнопкой
                     message_text, reply_markup = result
@@ -1152,6 +880,7 @@ async def message_handler(message: types.Message):
                     )
                 logging.info(f"✅ Создан резервный клон: {token[:10]}...")
             else:
+                print(f"❌ ОШИБКА создания клона: {result}")  # ДОБАВЬТЕ
                 await message.answer(
                     f"❌ <b>Ошибка при создании клона:</b>\n\n"
                     f"{result}\n\n"
@@ -1164,6 +893,7 @@ async def message_handler(message: types.Message):
                     reply_markup=main_menu
                 )
         else:
+            print(f"❌ Невалидный токен от пользователя {user_id}")  # ДОБАВЬТЕ
             await message.answer(
                 "❌ <b>Неверный формат токена.</b>\n\n"
                 "Токен должен иметь формат:\n"
