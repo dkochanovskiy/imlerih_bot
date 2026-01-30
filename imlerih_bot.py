@@ -520,7 +520,7 @@ if __name__ == "__main__":
         bot_link = generate_clone_link(token)
         
         if process_running and api_check_passed:
-            message_text = f"✅ Клон создан и запущен!\\n🆔 ID: {clone_id}\\n👤 @{api_username}\\n🔑 {token[:10]}...\\n📊 PID: {pid}"
+            message_text = f"✅ Клон создан и запущен!"
             
             if bot_link:
                 markup = InlineKeyboardMarkup(
