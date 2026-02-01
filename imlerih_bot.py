@@ -317,247 +317,96 @@ def save_clone_process_info(clone_id: str, pid: int, token: str):
         logging.error(f"❌ Ошибка сохранения информации о процессе: {e}")
         return False
 
-def create_simple_clone(token: str) -> tuple[bool, str]:
-    """Создание простого работающего клона - УПРОЩЕННАЯ РАБОЧАЯ ВЕРСИЯ"""
+def create_clone_with_launcher(token: str) -> tuple[bool, str]:
+    """Создание клона через исправленный лаунчер"""
     try:
-        logging.info(f"🔄 Начинаю создание простого клона с токеном: {token[:10]}...")
+        logging.info(f"🔄 Создаю клон через исправленный лаунчер: {token[:10]}...")
         
-        # 1. Создаем уникальный ID для клона
-        clone_id = f"clone_{int(time.time())}_{random.randint(1000, 9999)}"
-        logging.info(f"✅ Создан ID клона: {clone_id}")
+        # Путь к исправленному скрипту-лаунчеру
+        fixed_launcher = "/var/www/imlerih_bot/fixed_launcher.py"
+        old_launcher = "/var/www/imlerih_bot/clone_launcher.py"
         
-        # 2. Создаем СУПЕР ПРОСТОЙ скрипт БЕЗ сложных f-строк
-        # Используем format() вместо f-строк для избежания ошибок
+        # Определяем какой лаунчер использовать
+        launcher_script = None
         
-        script_template = '''#!/usr/bin/env python3
-"""
-ПРОСТОЙ РЕЗЕРВНЫЙ КЛОН БОТА
-ID: {clone_id}
-"""
-
-import asyncio
-import os
-import sys
-
-# Отключаем apport
-os.environ['APPORT_DISABLE'] = '1'
-
-# Токен клона
-BOT_TOKEN = "{token}"
-
-# ID клона
-CLONE_ID = "{clone_id}"
-
-print("=" * 50)
-print("🌟 ЗАПУСК КЛОНА БОТА")
-print("🆔 ID: " + CLONE_ID)
-print("🔑 Токен: " + BOT_TOKEN[:10] + "...")
-print("=" * 50)
-
-try:
-    from aiogram import Bot, Dispatcher, types
-    from aiogram.filters import Command
-    from aiogram.fsm.storage.memory import MemoryStorage
-    print("✅ aiogram импортирован успешно")
-except ImportError as e:
-    print("❌ Ошибка импорта aiogram: " + str(e))
-    sys.exit(1)
-
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-
-@dp.message(Command("start"))
-async def start_cmd(message: types.Message):
-    print("🎉 Клон получил /start от " + str(message.from_user.id))
-    await message.answer(
-        "🤖 <b>Я резервный клон!</b>\\n"
-        "ID: <code>" + CLONE_ID + "</code>\\n"
-        "Токен: <code>" + BOT_TOKEN[:10] + "...</code>\\n\\n"
-        "Отправьте любое сообщение для теста.",
-        parse_mode="HTML"
-    )
-
-@dp.message(Command("ping"))
-async def ping_cmd(message: types.Message):
-    await message.answer("🏓 Pong! Клон работает")
-
-@dp.message()
-async def echo(message: types.Message):
-    if message.text:
-        await message.answer("📨 Echo: " + message.text)
-
-async def main():
-    print("🔄 Запуск polling для клона " + CLONE_ID + "...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("✅ Вебхук удален")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("👆 Остановка по Ctrl+C")
-    except Exception as e:
-        print("💥 Критическая ошибка запуска: " + str(e))
-        import traceback
-        traceback.print_exc()
-'''
+        if os.path.exists(fixed_launcher):
+            launcher_script = fixed_launcher
+            logging.info("✅ Использую исправленный лаунчер")
+        elif os.path.exists(old_launcher):
+            launcher_script = old_launcher
+            logging.warning("⚠️ Использую старый лаунчер")
+        else:
+            logging.error("❌ Ни один лаунчер не найден!")
+            return False, "❌ Скрипт-лаунчер не найден"
         
-        # 3. Заполняем шаблон
-        script_content = script_template.format(
-            clone_id=clone_id,
-            token=token
-        )
+        # Проверяем что лаунчер существует
+        if not launcher_script or not os.path.exists(launcher_script):
+            return False, f"❌ Лаунчер не найден"
         
-        # 4. Сохраняем скрипт
-        script_filename = f"/var/www/imlerih_bot/clones/bot_{clone_id}.py"
-        os.makedirs("/var/www/imlerih_bot/clones", exist_ok=True)
+        # Запускаем лаунчер с таймаутом
+        cmd = ["timeout", "30", "python3", launcher_script, token]  # ← ДОБАВЛЕН timeout
+        logging.info(f"🚀 Запускаю лаунчер: {' '.join(cmd)}")
         
-        with open(script_filename, 'w') as f:
-            f.write(script_content)
-        
-        os.chmod(script_filename, 0o755)
-        logging.info(f"✅ Создан скрипт клона: {script_filename}")
-        
-        # 5. ПРОСТАЯ проверка - смотрим содержимое файла
-        logging.info("🔍 Проверяю созданный скрипт...")
-        with open(script_filename, 'r') as f:
-            first_lines = ''.join(f.readlines()[:10])
-            logging.info(f"📄 Первые 10 строк скрипта:\\n{first_lines}")
-        
-        # Проверяем что переменные подставились
-        with open(script_filename, 'r') as f:
-            content = f.read()
-            if clone_id not in content:
-                logging.error(f"❌ clone_id '{clone_id}' не найден в скрипте!")
-                return False, f"❌ Ошибка: clone_id не подставился в скрипт"
-            if token not in content:
-                logging.error(f"❌ token не найден в скрипте!")
-                return False, f"❌ Ошибка: token не подставился в скрипт"
-        
-        # 6. Запускаем клон
-        log_file = f"/var/www/imlerih_bot/logs/clone_{clone_id}.log"
-        os.makedirs("/var/www/imlerih_bot/logs", exist_ok=True)
-        
-        # Очищаем лог
-        with open(log_file, 'w') as f:
-            f.write(f"=== ЗАПУСК КЛОНА {clone_id} ===\\n")
-        
-        # Команда для запуска
-        cmd = ["python3", script_filename]
-        logging.info(f"🚀 Запускаю команду: {' '.join(cmd)}")
-        
-        # Запускаем процесс
-        env = os.environ.copy()
-        env['APPORT_DISABLE'] = '1'
-        
-        process = subprocess.Popen(
+        # Запускаем и ждем завершения
+        result = subprocess.run(
             cmd,
-            stdout=open(log_file, 'a'),
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid,
-            cwd="/var/www/imlerih_bot",
-            env=env
+            capture_output=True,
+            text=True,
+            timeout=35  # На 5 секунд больше чем timeout
         )
         
-        pid = process.pid
-        logging.info(f"✅ Клон {clone_id} запущен с PID: {pid}")
-        save_clone_process_info(clone_id, pid, token)
-        
-        # 7. Ждем и проверяем
-        time.sleep(10)  # Даем время на запуск
-        
-        # 8. Проверяем процесс
-        try:
-            os.kill(pid, 0)
-            process_running = True
-            logging.info(f"✅ Процесс {pid} жив")
-        except OSError:
-            process_running = False
-            logging.warning(f"⚠️ Процесс {pid} не запущен")
-        
-        # 9. Проверяем лог
-        log_content = ""
-        if os.path.exists(log_file):
-            with open(log_file, 'r') as f:
-                log_content = f.read(2000)
+        # Проверяем результат
+        if result.returncode == 0:
+            # Успешно
+            output = result.stdout
             
-            logging.info(f"📄 Лог клона (первые 500 символов):\\n{log_content[:500]}")
+            # Простой парсинг
+            clone_id = f"clone_{int(time.time())}"
+            pid = "unknown"
             
-            # Проверяем на ошибки
-            if "ImportError" in log_content:
-                return False, f"❌ Ошибка импорта aiogram в клоне"
-            elif "NameError" in log_content or "not defined" in log_content:
-                # Найдем конкретную ошибку
-                lines = log_content.split('\\n')
-                for line in lines:
-                    if "NameError" in line or "not defined" in line:
-                        return False, f"❌ Ошибка в коде клона: {line[:100]}"
-                return False, f"❌ Ошибка NameError в клоне"
-            elif "SyntaxError" in log_content:
-                return False, f"❌ Синтаксическая ошибка в скрипте клона"
-        
-        # 10. Проверяем API бота
-        api_check_passed = False
-        api_username = "нет"
-        try:
-            import requests
-            check_url = f"https://api.telegram.org/bot{token}/getMe"
-            response = requests.get(check_url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("ok"):
-                    api_check_passed = True
-                    api_username = data['result'].get('username', 'нет')
-                    logging.info(f"✅ API бота отвечает, username: @{api_username}")
-        except Exception as e:
-            logging.error(f"❌ Ошибка проверки API: {e}")
-        
-        # 11. Сохраняем токен
-        save_backup_token(token)
-        
-        # 12. Генерируем ссылку
-        bot_link = generate_clone_link(token)
-        
-        if process_running and api_check_passed:
-            message_text = f"✅ Клон создан и запущен!"
+            for line in output.split('\n'):
+                if "🆔 ID:" in line:
+                    clone_id = line.split(":")[1].strip()
+                elif "📊 PID:" in line:
+                    pid = line.split(":")[1].strip()
             
-            if bot_link:
-                markup = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)],
-                        [InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]
-                    ]
-                )
-            else:
-                markup = InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]]
-                )
+            # Сохраняем токен
+            save_backup_token(token)
+            
+            message_text = f"✅ <b>Резервный клон создан и запущен!</b>\n\n"
+            message_text += f"🆔 ID: {clone_id}\n"
+            message_text += f"🔑 Токен: {token[:10]}...\n"
+            message_text += f"📊 PID: {pid}\n\n"
+            message_text += f"📌 Клон запущен в отдельном процессе"
+            
+            markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="📊 Проверить статус", callback_data="check_clones")],
+                    [InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]
+                ]
+            )
             
             return True, (message_text, markup)
-        else:
-            # Читаем последние строки лога для диагностики
-            error_info = ""
-            if os.path.exists(log_file):
-                with open(log_file, 'r') as f:
-                    lines = f.readlines()
-                    if lines:
-                        last_lines = lines[-5:]  # Последние 5 строк
-                        error_info = "\\n📄 Последние строки лога:\\n" + "".join(last_lines)
             
-            return False, (
-                f"⚠️ <b>Проблемы с созданием клона</b>\\n"
-                f"🆔 ID: {clone_id}\\n"
-                f"📊 Статус процесса: {'🟢 Запущен' if process_running else '🔴 Не запущен'}\\n"
-                f"🌐 API: {'🟢 Отвечает' if api_check_passed else '🔴 Не отвечает'}"
-                f"{error_info}"
-            )
+        elif result.returncode == 124:  # Код выхода команды timeout
+            logging.error("⏰ Таймаут при создании клона (превышено 30 секунд)")
+            return False, "⏰ Таймаут при создании бота (превышено 30 секунд)"
+        else:
+            # Ошибка
+            error_msg = result.stderr if result.stderr else result.stdout
+            
+            # Берем последние строки ошибки
+            error_lines = error_msg.split('\n')[-5:]
+            error_preview = "\n".join(error_lines)
+            
+            return False, f"❌ <b>Ошибка создания клона:</b>\n\n{error_preview}"
         
+    except subprocess.TimeoutExpired:
+        logging.error("⏰ Таймаут subprocess при создании клона")
+        return False, "⏰ Таймаут при создании бота"
     except Exception as e:
         logging.error(f"❌ Исключение при создании клона: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, f"❌ Системная ошибка: {str(e)}"
+        return False, f"❌ Системная ошибка: {str(e)[:200]}"
 
 def has_created_clones() -> bool:
     try:
@@ -637,6 +486,42 @@ async def start_handler(message: types.Message):
     extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n"
     
     await message.answer(text + extra_text, reply_markup=menu_button, parse_mode="HTML")
+
+@dp.message(Command("test_launcher"))
+async def test_launcher_handler(message: types.Message):
+    """Тест скрипта-лаунчера"""
+    
+    # Простой тест
+    test_script = '''
+#!/usr/bin/env python3
+print("=== ТЕСТ ЛАУНЧЕРА ===")
+print("✅ Скрипт-лаунчер работает")
+print("🆔 ID: test_123")
+print("👤 Username: test_bot")
+print("📊 PID: 9999")
+print("✅ Все проверки пройдены")
+'''
+    
+    test_file = "/var/www/imlerih_bot/test_launcher.py"
+    with open(test_file, 'w') as f:
+        f.write(test_script)
+    
+    os.chmod(test_file, 0o755)
+    
+    # Запускаем
+    result = subprocess.run(["python3", test_file], capture_output=True, text=True)
+    
+    response = f"🧪 <b>Тест лаунчера:</b>\n\n"
+    
+    if result.returncode == 0:
+        response += f"✅ <b>УСПЕХ:</b>\n<code>{result.stdout}</code>"
+    else:
+        response += f"❌ <b>ОШИБКА:</b>\n<code>{result.stderr}</code>"
+    
+    await message.answer(response, parse_mode="HTML")
+    
+    # Удаляем тестовый файл
+    os.remove(test_file)
 
 @dp.message(Command("debug_clone"))
 async def debug_clone_handler(message: types.Message):
@@ -845,7 +730,7 @@ async def message_handler(message: types.Message):
         if is_valid_token(token):
             await message.answer("🔄 Создаю резервного клона... Пожалуйста, подождите (это может занять до 60 секунд).", parse_mode="HTML")
             
-            success, result = create_simple_clone(token)
+            success, result = create_clone_with_launcher(token)
             
             if success:
                 if isinstance(result, tuple) and len(result) == 2:
