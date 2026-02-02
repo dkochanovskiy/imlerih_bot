@@ -377,7 +377,6 @@ def create_clone_with_launcher(token: str) -> tuple[bool, str]:
         
         # Путь к исправленному скрипту-лаунчеру
         fixed_launcher = "/var/www/imlerih_bot/fixed_launcher.py"
-        old_launcher = "/var/www/imlerih_bot/clone_launcher.py"
         
         # Определяем какой лаунчер использовать
         launcher_script = None
@@ -385,9 +384,6 @@ def create_clone_with_launcher(token: str) -> tuple[bool, str]:
         if os.path.exists(fixed_launcher):
             launcher_script = fixed_launcher
             logging.info("✅ Использую исправленный лаунчер")
-        elif os.path.exists(old_launcher):
-            launcher_script = old_launcher
-            logging.warning("⚠️ Использую старый лаунчер")
         else:
             logging.error("❌ Ни один лаунчер не найден!")
             return False, "❌ Скрипт-лаунчер не найден"
