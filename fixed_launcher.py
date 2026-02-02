@@ -122,18 +122,27 @@ back_button = InlineKeyboardMarkup(inline_keyboard=[
 
 # ==================== ОБРАБОТЧИКИ ====================
 
+def get_message_by_id(message_id: str) -> str:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        cursor.execute("SELECT text_message FROM interaction WHERE id_message = %s", (message_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row["text_message"] if row else "Текст не найден."
+    except Exception as e:
+        logging.error(f"❌ Ошибка при запросе к БД: {e}")
+        return "Ошибка загрузки текста."
+
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer(
-        f"🤖 <b>Я резервный клон!</b>\\n\\n"
-        f"🆔 ID: {clone_id}\\n"
-        f"🔑 Токен: {token[:10]}...\\n\\n"
-        f"✅ Все функции работают\\n"
-        f"📊 Копия основного бота",
-        reply_markup=menu_button,
-        parse_mode="HTML"
-    )
-    logging.info(f"🎉 Клон {clone_id}: /start от {{message.from_user.id}}")
+    
+    cleanup_old_captchas()
+    cleanup_old_activity()
+    
+    text = get_message_by_id("welcome")
+    
+    await message.answer(text, reply_markup=menu_button, parse_mode="HTML")
 
 @dp.message(Command("test"))
 async def test_handler(message: types.Message):

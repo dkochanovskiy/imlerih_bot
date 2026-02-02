@@ -1,0 +1,19 @@
+{
+    "database": {
+        "host": "localhost",
+        "database": "karantir_bot",
+        "user": "karantir_user",
+        "password": "karantir_pass",
+        "port": 5432
+    },
+    "bot": {
+        "token_file": "/var/www/imlerih_bot/txt/token.txt",
+        "logs_dir": "/var/www/imlerih_bot/logs",
+        "clones_dir": "/var/www/imlerih_bot/clones"
+    },
+    "security": {
+        "captcha_lifetime": 300,
+        "spam_time_window": 10,
+        "spam_message_limit": 5
+    }
+}

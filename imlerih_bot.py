@@ -63,11 +63,47 @@ check_duplicate_services()
 
 # ==================== НАСТРОЙКИ ====================
 
+def load_config():
+    """Загружает конфигурацию из файла"""
+    config_path = "/var/www/imlerih_bot/config.json"
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Возвращаем конфигурацию по умолчанию
+        logging.warning(f"⚠️ Файл конфигурации {config_path} не найден, используем настройки по умолчанию")
+        return {
+            "database": {
+                "host": "localhost",
+                "database": "karantir_bot",
+                "user": "karantir_user",
+                "password": "karantir_pass",
+                "port": 5432
+            },
+            "bot": {
+                "token_file": "/var/www/imlerih_bot/txt/token.txt",
+                "logs_dir": "/var/www/imlerih_bot/logs",
+                "clones_dir": "/var/www/imlerih_bot/clones"
+            },
+            "security": {
+                "captcha_lifetime": 300,
+                "spam_time_window": 10,
+                "spam_message_limit": 5
+            }
+        }
+    except json.JSONDecodeError as e:
+        logging.error(f"❌ Ошибка парсинга config.json: {e}")
+        raise
+
+CONFIG = load_config()
+BOT_CONFIG = CONFIG["bot"]
+
 try:
-    with open("/var/www/imlerih_bot/txt/token.txt", "r", encoding="utf-8") as f:
+    token_file = BOT_CONFIG.get("token_file", "/var/www/imlerih_bot/txt/token.txt")
+    with open(token_file, "r", encoding="utf-8") as f:
         BOT_TOKEN = f.read().strip()
 except FileNotFoundError:
-    print("❌ Файл /var/www/imlerih_bot/txt/token.txt не найден!")
+    print(f"❌ Файл токена не найден: {token_file}!")
     exit()
 
 # Создаём основного бота и диспетчер
@@ -75,10 +111,14 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 # Файлы состояния
-STATE_FILE = "/var/www/imlerih_bot/clone_state.json"
-BACKUP_TOKENS_FILE = "/var/www/imlerih_bot/backup_tokens.json"
-OWNER_CLONES_FILE = "/var/www/imlerih_bot/owner_clones.json"
-CLONE_PROCESSES_FILE = "/var/www/imlerih_bot/clone_processes.json"
+BASE_DIR = "/var/www/imlerih_bot"
+CLONES_DIR = BOT_CONFIG.get("clones_dir", f"{BASE_DIR}/clones")
+LOGS_DIR = BOT_CONFIG.get("logs_dir", f"{BASE_DIR}/logs")
+
+STATE_FILE = f"{BASE_DIR}/clone_state.json"
+BACKUP_TOKENS_FILE = f"{BASE_DIR}/backup_tokens.json"
+OWNER_CLONES_FILE = f"{BASE_DIR}/owner_clones.json"
+CLONE_PROCESSES_FILE = f"{BASE_DIR}/clone_processes.json"
 
 # ========= ЗАЩИТА ОТ СПАМА ========
 captcha_storage = {}
@@ -207,12 +247,25 @@ clone_menu = InlineKeyboardMarkup(inline_keyboard=[
 create_bot_menu = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="clone")]])
 
 def get_db_connection():
-    return psycopg2.connect(
-        host="localhost",
-        database="karantir_bot",
-        user="karantir_user",
-        password="karantir_pass"
-    )
+    """Создает подключение к БД на основе конфигурации"""
+    config = load_config()
+    db_config = config["database"]
+    
+    try:
+        connection = psycopg2.connect(
+            host=db_config.get("host", "localhost"),
+            database=db_config.get("database", "karantir_bot"),
+            user=db_config.get("user", "karantir_user"),
+            password=db_config.get("password", "karantir_pass"),
+            port=db_config.get("port", 5432)
+        )
+        return connection
+    except psycopg2.Error as e:
+        logging.error(f"❌ Ошибка подключения к БД: {e}")
+        # Показываем какие параметры используются (без пароля)
+        logging.error(f"📊 Параметры подключения: host={db_config.get('host')}, "
+                     f"db={db_config.get('database')}, user={db_config.get('user')}")
+        raise
 
 def get_message_by_id(message_id: str) -> str:
     try:
@@ -373,40 +426,29 @@ def create_clone_with_launcher(token: str) -> tuple[bool, str]:
             # Сохраняем токен
             save_backup_token(token)
             
-            message_text = f"✅ <b>Резервный клон создан и запущен!</b>\n\n"
-            message_text += f"🆔 ID: {clone_id}\n"
-            message_text += f"🔑 Токен: {token[:10]}...\n"
-            message_text += f"📊 PID: {pid}\n\n"
-            message_text += f"📌 Клон запущен в отдельном процессе"
-            
-            markup = InlineKeyboardMarkup(
+            # Генерируем ссылку на бота - теперь через API
+            bot_link = generate_clone_link(token)
+
+            message_text = f"✅ Резервный клон создан и запущен!"
+                
+            open_clone_button = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="📊 Проверить статус", callback_data="check_clones")],
+                    [InlineKeyboardButton(text="🔗 Открыть клона", url=bot_link)],
                     [InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]
-                ]
+                ]                        
             )
-            
-            return True, (message_text, markup)
-            
-        elif result.returncode == 124:  # Код выхода команды timeout
-            logging.error("⏰ Таймаут при создании клона (превышено 30 секунд)")
-            return False, "⏰ Таймаут при создании бота (превышено 30 секунд)"
+            return True, (message_text, open_clone_button)
         else:
-            # Ошибка
             error_msg = result.stderr if result.stderr else result.stdout
-            
-            # Берем последние строки ошибки
-            error_lines = error_msg.split('\n')[-5:]
-            error_preview = "\n".join(error_lines)
-            
-            return False, f"❌ <b>Ошибка создания клона:</b>\n\n{error_preview}"
+            logging.error(f"❌ Ошибка запуска клона: {error_msg}")
+            return False, f"❌ Ошибка запуска клона: {error_msg}"
         
     except subprocess.TimeoutExpired:
-        logging.error("⏰ Таймаут subprocess при создании клона")
-        return False, "⏰ Таймаут при создании бота"
+        logging.error("⏰ Таймаут при запуске клона")
+        return False, "Таймаут при запуске клона (превышено 30 секунд)"
     except Exception as e:
         logging.error(f"❌ Исключение при создании клона: {e}")
-        return False, f"❌ Системная ошибка: {str(e)[:200]}"
+        return False, f"❌ Исключение при создании клона: {str(e)}"
 
 def has_created_clones() -> bool:
     try:
@@ -775,8 +817,8 @@ async def message_handler(message: types.Message):
 
 async def main():
     try:
-        os.makedirs("/var/www/imlerih_bot/clones", exist_ok=True)
-        os.makedirs("/var/www/imlerih_bot/logs", exist_ok=True)
+        os.makedirs(CLONES_DIR, exist_ok=True)
+        os.makedirs(LOGS_DIR, exist_ok=True)
         
         logging.info("✅ Проверены/созданы необходимые директории")
         
