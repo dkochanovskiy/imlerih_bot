@@ -7,40 +7,31 @@ import random
 import subprocess
 import requests  # ← Добавить этот импорт
 
-def get_main_token():
-    try:
-        with open("/var/www/imlerih_bot/txt/token.txt", 'r') as f:
-            return f.read().strip()
-    except:
-        return None
-
-main_bot_token = get_main_token()
-
 # проверка жизнеспособности основного бота
-def is_main_bot_deleted(main_bot_token):
-    if not main_bot_token:
-        print("❌ Токен основного бота не получен")
-        return True  # считаем что бот удален если не можем получить токен
+def check_main_bot_status():
+    status_file = "/var/www/imlerih_bot/main_bot_status.json"
+    
+    if not os.path.exists(status_file):
+        return "unknown"
     
     try:
-        url = f"https://api.telegram.org/bot{main_bot_token}/getMe"
-        response = requests.get(url, timeout=5)
+        with open(status_file, 'r') as f:
+            data = json.load(f)
         
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("ok", False):
-                print(f"✅ Основной бот жив")
-                return False  # бот жив
-            else:
-                print(f"❌ Основной бот удален/заблокирован: {data.get('description', 'unknown')}")
-                return True  # бот удален
-        else:
-            print(f"❌ Ошибка HTTP {response.status_code}")
-            return True  # бот вероятно удален
+        # Проверяем не устарели ли данные (больше 10 минут)
+        if "last_check" in data:
+            from datetime import datetime
+            last_check = datetime.fromisoformat(data["last_check"].replace('Z', '+00:00'))
+            current_time = datetime.now()
+            
+            # Если данные старше 10 минут, считаем устаревшими
+            if (current_time - last_check).total_seconds() > 600:
+                return "stale"
+        
+        return data.get("status", "unknown")
+        
     except Exception as e:
-        print(f"❌ Ошибка соединения: {e}")
-        return True  # если ошибка соединения
-
+        return "error"
 
 def create_clone_with_full_menu(token, clone_id):
     """Создает клон с полным меню как у основного бота"""
@@ -56,6 +47,9 @@ def create_clone_with_full_menu(token, clone_id):
     script = f'''#!/usr/bin/env python3
 import asyncio
 import logging
+import json
+import os
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -78,17 +72,71 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# ========= КНОПКИ (ТАКИЕ ЖЕ КАК В ОСНОВНОМ БОТЕ) ========
+# ========= ФУНКЦИЯ ПРОВЕРКИ СТАТУСА ОСНОВНОГО БОТА ========
+def check_main_bot_status():
+    status_file = "/var/www/imlerih_bot/main_bot_status.json"
+    logger.info(f"Checking main bot status from file: {{status_file}}")
+    
+    if not os.path.exists(status_file):
+        logger.warning(f"Status file not found: {{status_file}}")
+        return True  # Основной бот работает
+    
+    try:
+        with open(status_file, 'r') as f:
+            data = json.load(f)
+        
+        logger.info(f"Status file content: {{data}}")
+        
+        # Проверяем не устарели ли данные (больше 10 минут)
+        if "last_check" in data:
+            last_check = datetime.fromisoformat(data["last_check"].replace('Z', '+00:00'))
+            current_time = datetime.now()
+            
+            time_diff = (current_time - last_check).total_seconds()
+            logger.info(f"Time difference: {{time_diff}} seconds")
+            
+            # Если данные старше 10 минут, считаем устаревшими
+            if time_diff > 600:
+                logger.warning(f"Status data is stale (older than 10 minutes)")
+                return False  # Основной бот не работает
+        
+        status = data.get("status", "unknown")
+        logger.info(f"Main bot status: {{status}}")
+        
+        # Проверяем статус - если "running", то бот работает
+        return status != "running"
+        
+    except Exception as e:
+        logger.error(f"Error checking main bot status: {{e}}", exc_info=True)
+        return False  # Основной бот не работает
+
+# ========= ФУНКЦИЯ СОЗДАНИЯ МЕНЮ С УЧЕТОМ СТАТУСА ========
+def create_main_menu():
+    main_bot_running = check_main_bot_status()
+    logger.info(f"Creating menu. Main bot running: {{main_bot_running}}")
+    
+    if main_bot_running:
+        # Основной бот работает - Профиль и Клон бота неактивны
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⛔ Профиль (основной бот работает)", callback_data="profile_disabled"), 
+             InlineKeyboardButton(text="⛔ Клон бота (основной бот работает)", callback_data="clone_disabled")],
+            [InlineKeyboardButton(text="Оформить заказ", callback_data="place_order"), 
+             InlineKeyboardButton(text="Менеджер", callback_data="manager")],
+            [InlineKeyboardButton(text="Назад", callback_data="back_to_welcome")]
+        ])
+    else:
+        # Основной бот не работает - все кнопки активны
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Профиль", callback_data="profile"), 
+             InlineKeyboardButton(text="Клон бота - защита", callback_data="clone")],
+            [InlineKeyboardButton(text="Оформить заказ", callback_data="place_order"), 
+             InlineKeyboardButton(text="Менеджер", callback_data="manager")],
+            [InlineKeyboardButton(text="Назад", callback_data="back_to_welcome")]
+        ])
+
+# ========= БАЗОВЫЕ КНОПКИ ========
 menu_button = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Меню", callback_data="menu")]
-])
-
-main_menu = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="Профиль", callback_data="profile"), 
-     InlineKeyboardButton(text="Клон бота - защита", callback_data="clone")],
-    [InlineKeyboardButton(text="Оформить заказ", callback_data="place_order"), 
-     InlineKeyboardButton(text="Менеджер", callback_data="manager")],
-    [InlineKeyboardButton(text="Назад", callback_data="back_to_welcome")]
 ])
 
 back_button = InlineKeyboardMarkup(inline_keyboard=[
@@ -153,16 +201,52 @@ async def start_handler(message: types.Message):
 
 @dp.message(Command("menu"))
 async def menu_command_handler(message: types.Message):
-    await message.answer("Меню", reply_markup=main_menu)
+    logger.info(f"Menu command from {{message.from_user.id}}")
+    main_menu = create_main_menu()
+    main_bot_running = check_main_bot_status()
+    
+    if main_bot_running:
+        text = "📋 <b>Меню</b>\\n⚠️ <b>Основной бот работает</b>\\nФункции Профиль и Клон бота временно недоступны"
+        await message.answer(text, reply_markup=main_menu, parse_mode="HTML")
+    else:
+        await message.answer("📋 <b>Меню</b>", reply_markup=main_menu, parse_mode="HTML")
+
+@dp.message(Command("status"))
+async def status_handler(message: types.Message):
+    """Команда для проверки статуса (для отладки)"""
+    main_bot_status = check_main_bot_status()
+    status_file = "/var/www/imlerih_bot/main_bot_status.json"
+    
+    try:
+        if os.path.exists(status_file):
+            with open(status_file, 'r') as f:
+                data = json.load(f)
+            file_info = f"\\n📄 Файл статуса: {{json.dumps(data, ensure_ascii=False, indent=2)}}"
+        else:
+            file_info = "\\n📄 Файл статуса: не найден"
+    except Exception as e:
+        file_info = f"\\n📄 Ошибка чтения файла: {{e}}"
+    
+    status_text = "работает ✅" if main_bot_status else "не работает ❌"
+    
+    await message.answer(
+        f"🔍 <b>Статус системы</b>\\n"
+        f"🤖 Основной бот: {{status_text}}\\n"
+        f"🆔 Этот клон: {{CLONE_ID}}\\n"
+        f"🔑 Токен: {{BOT_TOKEN[:10]}}...\\n"
+        f"{{file_info}}",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("clone_info"))
 async def clone_info_handler(message: types.Message):
-    import os
+    main_bot_status = "работает ✅" if check_main_bot_status() else "не работает ❌"
     await message.answer(
         f"📊 <b>Информация о клоне</b>\\n"
         f"🤖 ID: {{CLONE_ID}}\\n"
         f"🔑 Токен: {{BOT_TOKEN[:10]}}...\\n"
-        f"⚙️ PID: {{os.getpid()}}",
+        f"⚙️ PID: {{os.getpid()}}\\n"
+        f"📡 Основной бот: {{main_bot_status}}",
         parse_mode="HTML"
     )
 
@@ -170,25 +254,49 @@ async def clone_info_handler(message: types.Message):
 @dp.callback_query()
 async def callback_handler(callback: types.CallbackQuery):
     action = callback.data
-    logger.info(f"Button pressed: {{action}}")
+    logger.info(f"Button pressed: {{action}} from user {{callback.from_user.id}}")
     
     if action == "menu":
-        await callback.message.edit_text("Меню", reply_markup=main_menu)
+        logger.info(f"Menu button pressed, checking main bot status...")
+        main_menu = create_main_menu()
+        main_bot_running = check_main_bot_status()
+        
+        if main_bot_running:
+            text = "📋 <b>Меню</b>\\n⚠️ <b>Основной бот работает</b>\\nФункции Профиль и Клон бота временно недоступны"
+            await callback.message.edit_text(text, reply_markup=main_menu, parse_mode="HTML")
+        else:
+            await callback.message.edit_text("📋 <b>Меню</b>", reply_markup=main_menu, parse_mode="HTML")
+            
+    elif action == "profile_disabled" or action == "clone_disabled":
+        logger.info(f"Disabled button pressed: {{action}}")
+        await callback.answer("⚠️ Эта функция недоступна пока основной бот работает", show_alert=True)
+        return
         
     elif action == "profile":
+        logger.info(f"Profile button pressed, checking if available...")
+        if check_main_bot_status():
+            await callback.answer("⚠️ Эта функция недоступна пока основной бот работает", show_alert=True)
+            return
         text = get_message_by_id("profile")
         await callback.message.edit_text(text, reply_markup=back_button)
         
     elif action == "clone":
+        logger.info(f"Clone button pressed, checking if available...")
+        if check_main_bot_status():
+            await callback.answer("⚠️ Эта функция недоступна пока основной бот работает", show_alert=True)
+            return
         text = get_message_by_id("clone")
         extra = "\\n\\n🤖 <b>Это резервный клон!</b>\\nСоздайте своего клона для дополнительной защиты."
         await callback.message.edit_text(text + extra, reply_markup=clone_menu, parse_mode="HTML")
         
     elif action == "create_clone":
+        logger.info(f"Create clone button pressed, checking if available...")
+        if check_main_bot_status():
+            await callback.answer("⚠️ Эта функция недоступна пока основной бот работает", show_alert=True)
+            return
         text = get_message_by_id("guide_create_clone")
         full_text = text + "\\n\\n📝 <b>Создание резервного клона</b>\\n\\nОтправьте мне токен нового бота.\\n\\nПример токена:\\n<code>1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890</code>"
         await callback.message.edit_text(full_text, reply_markup=create_bot_menu, parse_mode="HTML")
-        # Здесь можно добавить ожидание токена
         
     elif action == "place_order":
         text = get_message_by_id("place_order")
@@ -206,10 +314,16 @@ async def callback_handler(callback: types.CallbackQuery):
 
 @dp.message()
 async def echo_handler(message: types.Message):
-    await message.answer(f"Клон получил: {{message.text}}")
+    # Добавляем команду для отладки
+    if message.text.lower() == "/debug_status":
+        main_bot_running = check_main_bot_status()
+        await message.answer(f"Debug: main_bot_running = {{main_bot_running}}")
+    else:
+        await message.answer(f"Клон получил: {{message.text}}")
 
 async def main():
     logger.info(f"Starting clone {{CLONE_ID}} with full menu")
+    logger.info(f"Initial main bot status check: {{check_main_bot_status()}}")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
@@ -282,13 +396,4 @@ def main():
         print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    if main_bot_token:
-        print(f"📋 Получен токен основного бота: {main_bot_token[:15]}...")
-        
-        # Проверяем статус
-        if is_main_bot_deleted(main_bot_token):
-            print("🚨 Основной бот НЕДОСТУПЕН! Нужно активировать клона!")
-        else:
-            print("✅ Основной бот работает, клон в режиме ожидания")
-    else:
-        print("⚠️ Не удалось получить токен основного бота")
+    main()
