@@ -669,13 +669,32 @@ async def callback_handler(callback: types.CallbackQuery):
         await callback.answer()
         
     elif action == "profile":
-        has_created = has_created_clones()
-        status_emoji = "✅" if has_created else "⚪️"
+        # Читаем статус из status.json
+        status_emoji = "⚪️"  # значение по умолчанию
+        
+        try:
+            status_file = "/var/www/imlerih_bot/status.json"
+            if os.path.exists(status_file):
+                with open(status_file, 'r') as f:
+                    status_data = json.load(f)
+                    if status_data.get("clone_status") == "false":
+                        status_emoji = "⚪️"
+                    else:
+                        status_emoji = "✅"
+        except Exception as e:
+            logging.error(f"❌ Ошибка чтения status.json: {e}")
+            status_emoji = "⚪️"  # при ошибке показываем ⚪️
         
         text = get_message_by_id("profile")
         full_text = f"{text}\n\nСтатус клона: {status_emoji}"
         
-        await callback.message.edit_text(full_text, reply_markup=back_button)
+        # Создаем клавиатуру с кнопкой "Клон" над кнопкой "Назад"
+        profile_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Клон", callback_data="clone")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="menu")]
+        ])
+        
+        await callback.message.edit_text(full_text, reply_markup=profile_keyboard)
         await callback.answer()
         
     elif action == "clone":
@@ -858,8 +877,7 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler("/var/www/imlerih_bot/logs/bot.log"),
-            logging.StreamHandler()
+            logging.FileHandler("/var/www/imlerih_bot/logs/bot.log")
         ]
     )
     
