@@ -5,7 +5,20 @@ import json
 import time
 import random
 import subprocess
+import requests  # ← Добавить этот импорт
 
+# проверка жизнеспособности основного бота
+def is_main_bot_deleted(token):
+    try:
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return not data.get("ok", False)  # False = бот жив, True = бот удален
+        return True  # Если ошибка HTTP - бот вероятно удален
+    except:
+        return True  # Если ошибка соединения
 def create_clone_with_full_menu(token, clone_id):
     """Создает клон с полным меню как у основного бота"""
     
