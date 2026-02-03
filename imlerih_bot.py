@@ -314,6 +314,21 @@ def is_valid_token(token: str) -> bool:
     
     return True
 
+def init_bot_status():
+    status_file = "/var/www/imlerih_bot/main_bot_status.json"
+    
+    status_data = {
+        "status": "running",
+        "last_check": datetime.now().isoformat() + "Z",
+        "last_updated": datetime.now().isoformat() + "Z",
+        "bot_started": datetime.now().isoformat() + "Z"
+    }
+    
+    with open(status_file, 'w') as f:
+        json.dump(status_data, f, indent=2)
+    
+    print(f"✅ Файл статуса создан: {status_file}")
+
 def save_owner_clone_info(clone_token: str):
     try:
         if os.path.exists(OWNER_CLONES_FILE):
@@ -862,6 +877,7 @@ async def message_handler(message: types.Message):
                 parse_mode="HTML",
                 reply_markup=main_menu
             )
+init_bot_status()
 
 # =========== POLLING ЗАПУСК ===========
 

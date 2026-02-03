@@ -12,26 +12,16 @@ def check_main_bot_status():
     status_file = "/var/www/imlerih_bot/main_bot_status.json"
     
     if not os.path.exists(status_file):
-        return "unknown"
+        return False  # Файла нет → основной бот НЕ работает
     
     try:
         with open(status_file, 'r') as f:
             data = json.load(f)
         
-        # Проверяем не устарели ли данные (больше 10 минут)
-        if "last_check" in data:
-            from datetime import datetime
-            last_check = datetime.fromisoformat(data["last_check"].replace('Z', '+00:00'))
-            current_time = datetime.now()
-            
-            # Если данные старше 10 минут, считаем устаревшими
-            if (current_time - last_check).total_seconds() > 600:
-                return "stale"
-        
-        return data.get("status", "unknown")
+        return data.get("status", "unknown") == "running"
         
     except Exception as e:
-        return "error"
+        return False  # Ошибка чтения → основной бот НЕ работает
 
 def create_clone_with_full_menu(token, clone_id):
     """Создает клон с полным меню как у основного бота"""
@@ -79,7 +69,7 @@ def check_main_bot_status():
     
     if not os.path.exists(status_file):
         logger.warning(f"Status file not found: {{status_file}}")
-        return True  # Основной бот работает
+        return False  # Основной бот не работает
     
     try:
         with open(status_file, 'r') as f:
@@ -87,24 +77,11 @@ def check_main_bot_status():
         
         logger.info(f"Status file content: {{data}}")
         
-        # Проверяем не устарели ли данные (больше 10 минут)
-        if "last_check" in data:
-            last_check = datetime.fromisoformat(data["last_check"].replace('Z', '+00:00'))
-            current_time = datetime.now()
-            
-            time_diff = (current_time - last_check).total_seconds()
-            logger.info(f"Time difference: {{time_diff}} seconds")
-            
-            # Если данные старше 10 минут, считаем устаревшими
-            if time_diff > 600:
-                logger.warning(f"Status data is stale (older than 10 minutes)")
-                return False  # Основной бот не работает
-        
         status = data.get("status", "unknown")
         logger.info(f"Main bot status: {{status}}")
         
         # Проверяем статус - если "running", то бот работает
-        return status != "running"
+        return status == "running"
         
     except Exception as e:
         logger.error(f"Error checking main bot status: {{e}}", exc_info=True)
