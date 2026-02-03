@@ -7,6 +7,7 @@ import subprocess
 import json
 import os
 import random
+from datetime import datetime
 import time
 import re
 import shutil
@@ -20,7 +21,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import psycopg2
 from psycopg2.extras import DictCursor
 
-import os
 import sys
 import socket
 
@@ -162,6 +162,23 @@ def requires_captcha(user_id: int) -> bool:
         return True
     
     return False
+
+def main_bot_status_is_true():
+    status_file = "/var/www/imlerih_bot/status.json"
+    
+    status_data = {
+        "clone_status": "true"
+    }
+    
+    try:
+        with open(status_file, 'w') as f:
+            json.dump(status_data, f, indent=2)
+        
+        print(f"✅ Статус основного бота обновлен: {'clone_created' if successful else 'clone_failed'}")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка при обновлении статуса: {e}")
+        return False
 
 def cleanup_old_captchas():
     current_time = time.time()
@@ -424,6 +441,8 @@ def create_clone_with_launcher(token: str) -> tuple[bool, str]:
             
             # Генерируем ссылку на бота - теперь через API
             bot_link = generate_clone_link(token)
+
+            main_bot_status_is_true()
 
             message_text = f"✅ Резервный клон создан и запущен!"
                 
