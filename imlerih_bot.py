@@ -508,6 +508,22 @@ def get_clones_list() -> str:
     except Exception as e:
         return f"❌ Ошибка получения списка: {str(e)}"
 
+# создание файла status.json
+def create_status_file():
+    status_file = "/var/www/imlerih_bot/status.json"
+    status_data = {
+        "clone_status": "false"
+    }
+    
+    try:
+        with open(status_file, 'w') as f:
+            json.dump(status_data, f, indent=4)
+        logging.info(f"✅ Создан файл статуса: {status_file}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Ошибка создания файла статуса: {e}")
+        return False
+
 # Глобальное состояние
 waiting_for_token_main = set()
 
@@ -818,6 +834,8 @@ async def main():
         
         logging.info("✅ Проверены/созданы необходимые директории")
         
+        create_status_file()
+
         await bot.delete_webhook(drop_pending_updates=True)
         logging.info("🗑️ Вебхук удален (если был)")
         
