@@ -124,8 +124,8 @@ CLONE_PROCESSES_FILE = f"{BASE_DIR}/clone_processes.json"
 captcha_storage = {}
 user_activity = defaultdict(list)
 CAPTCHA_LIFETIME = 300
-SPAM_TIME_WINDOW = 10
-SPAM_MESSAGE_LIMIT = 5
+SPAM_TIME_WINDOW = 30
+SPAM_MESSAGE_LIMIT = 3
 
 def generate_captcha() -> tuple[str, int]:
     a = random.randint(1, 10)
@@ -149,17 +149,45 @@ def generate_captcha() -> tuple[str, int]:
     return text, answer
 
 def requires_captcha(user_id: int) -> bool:
+    """Проверяет, требуется ли капча для пользователя"""
+    # Проверяем активную капчу
     if user_id in captcha_storage:
+        captcha_data = captcha_storage[user_id]
+        # Проверяем не устарела ли капча (больше 5 минут)
+        if time.time() - captcha_data["timestamp"] > CAPTCHA_LIFETIME:
+            captcha_storage.pop(user_id, None)
+            if user_id in user_activity:
+                user_activity.pop(user_id, None)
+            return False
         return True
     
+    # Проверяем активность пользователя
     current_time = time.time()
+    
+    # Инициализируем историю если нет
+    if user_id not in user_activity:
+        user_activity[user_id] = []
+    
+    # Очищаем старые сообщения (старше SPAM_TIME_WINDOW секунд)
     user_activity[user_id] = [t for t in user_activity[user_id] 
                              if current_time - t < SPAM_TIME_WINDOW]
-    user_activity[user_id].append(current_time)
     
-    if len(user_activity[user_id]) > SPAM_MESSAGE_LIMIT:
-        logging.warning(f"⚠️ Обнаружен возможный спам от пользователя {user_id}")
+    # ЛОГИРОВАНИЕ для отладки
+    logging.info(f"📊 Активность пользователя {user_id}: {len(user_activity[user_id])} сообщений за {SPAM_TIME_WINDOW} сек")
+    
+    # Проверяем лимит сообщений
+    if len(user_activity[user_id]) >= SPAM_MESSAGE_LIMIT:  # Изменено на >=
+        # Превышен лимит - создаем капчу
+        logging.warning(f"⚠️ Превышен лимит для пользователя {user_id}")
+        question, answer = generate_captcha()
+        captcha_storage[user_id] = {
+            "answer": answer,
+            "timestamp": current_time
+        }
         return True
+    
+    # Добавляем текущее сообщение В КОНЦЕ функции
+    user_activity[user_id].append(current_time)
     
     return False
 
@@ -174,7 +202,7 @@ def main_bot_status_is_true():
         with open(status_file, 'w') as f:
             json.dump(status_data, f, indent=2)
         
-        print(f"✅ Статус основного бота обновлен: {'clone_created' if successful else 'clone_failed'}")
+        print(f"✅ Статус основного бота обновлен")
         return True
     except Exception as e:
         print(f"❌ Ошибка при обновлении статуса: {e}")
@@ -567,13 +595,30 @@ waiting_for_token_main = set()
 async def start_handler(message: types.Message):
     logging.info(f"🎉 Основной бот: /start от {message.from_user.id}")
     
-    cleanup_old_captchas()
-    cleanup_old_activity()
-    
     text = get_message_by_id("welcome")
     extra_text = "\n\n🎉 <b>Вы основной бот!</b>\nСоздайте резервного клона на случай сбоев.\n\n"
     
     await message.answer(text + extra_text, reply_markup=menu_button, parse_mode="HTML")
+
+@dp.message(Command("captcha"))
+async def captcha_command_handler(message: types.Message):
+    """Команда для тестирования капчи"""
+    user_id = message.from_user.id
+    
+    # Принудительно показываем капчу
+    question, answer = generate_captcha()
+    captcha_storage[user_id] = {
+        "answer": answer,
+        "timestamp": time.time()
+    }
+    
+    await message.answer(
+        f"🔒 <b>Тест капчи</b>\n\n"
+        f"Решите пример:\n"
+        f"<b>{question} = ?</b>\n\n"
+        f"Ответьте числом в этот чат.",
+        parse_mode="HTML"
+    )
 
 @dp.message(Command("test_launcher"))
 async def test_launcher_handler(message: types.Message):
@@ -774,28 +819,54 @@ async def callback_handler(callback: types.CallbackQuery):
         await callback.answer()
 
 @dp.message()
+@dp.message()
 async def message_handler(message: types.Message):
     user_id = message.from_user.id
     text = message.text.strip()
     
-    cleanup_old_captchas()
-    cleanup_old_activity()
+    # Пропускаем команды
+    if text.startswith('/'):
+        await dp.feed_update(bot=bot, update=message)
+        return
     
-    if user_id in captcha_storage:
-        expected_answer = captcha_storage[user_id]["answer"]
-        
-        try:
-            user_answer = int(text)
-            if user_answer == expected_answer:
-                captcha_storage.pop(user_id)
-                await message.answer("✅ Капча пройдена успешно! Теперь вы можете продолжить.")
-                
-                if user_id in waiting_for_token_main:
-                    await message.answer("Теперь отправьте токен бота.")
+    # Проверяем капчу для ВСЕХ сообщений
+    if requires_captcha(user_id):
+        if user_id in captcha_storage:
+            expected_answer = captcha_storage[user_id]["answer"]
+            
+            try:
+                user_answer = int(text)
+                if user_answer == expected_answer:
+                    # Капча пройдена успешно
+                    captcha_storage.pop(user_id, None)
+                    if user_id in user_activity:
+                        user_activity.pop(user_id, None)
+                    
+                    await message.answer("✅ Капча пройдена успешно! Теперь вы можете продолжить.")
+                    
+                    if user_id in waiting_for_token_main:
+                        await message.answer("Теперь отправьте токен бота.")
+                    else:
+                        await message.answer("Меню", reply_markup=main_menu)
+                    return
                 else:
-                    await message.answer("Меню", reply_markup=main_menu)
-                return
-            else:
+                    # Неверный ответ
+                    question, answer = generate_captcha()
+                    captcha_storage[user_id] = {
+                        "answer": answer,
+                        "timestamp": time.time()
+                    }
+                    
+                    await message.answer(
+                        f"❌ Неверный ответ!\n\n"
+                        f"Попробуйте ещё раз:\n"
+                        f"<b>{question} = ?</b>\n\n"
+                        f"Ответьте числом.",
+                        parse_mode="HTML"
+                    )
+                    return
+            except ValueError:
+                # Не число
                 question, answer = generate_captcha()
                 captcha_storage[user_id] = {
                     "answer": answer,
@@ -803,86 +874,67 @@ async def message_handler(message: types.Message):
                 }
                 
                 await message.answer(
-                    f"❌ Неверный ответ!\n\n"
-                    f"Попробуйте ещё раз:\n"
+                    f"❌ Пожалуйста, ответьте числом.\n\n"
+                    f"Пример:\n"
                     f"<b>{question} = ?</b>\n\n"
                     f"Ответьте числом.",
                     parse_mode="HTML"
                 )
                 return
-        except ValueError:
-            await message.answer("❌ Пожалуйста, ответьте числом на пример капчи.")
+        else:
+            # Только что активировалась капча
+            question, answer = generate_captcha()
+            captcha_storage[user_id] = {
+                "answer": answer,
+                "timestamp": time.time()
+            }
+            
+            await message.answer(
+                f"🔒 <b>Обнаружена подозрительная активность</b>\n\n"
+                f"Вы отправили слишком много сообщений.\n"
+                f"Решите пример, чтобы продолжить:\n"
+                f"<b>{question} = ?</b>\n\n"
+                f"Ответьте числом.",
+                parse_mode="HTML"
+            )
             return
     
-    if requires_captcha(user_id):
-        question, answer = generate_captcha()
-        captcha_storage[user_id] = {
-            "answer": answer,
-            "timestamp": time.time()
-        }
-        
-        await message.answer(
-            f"🔒 <b>Проверка безопасности</b>\n\n"
-            f"Решите простой пример, чтобы продолжить:\n"
-            f"<b>{question} = ?</b>\n\n"
-            f"Ответьте числом.",
-            parse_mode="HTML"
-        )
-        return
-    
+    # Если пользователь ожидает токен
     if user_id in waiting_for_token_main:
         token = text
         waiting_for_token_main.discard(user_id)
-        
-        if is_valid_token(token):
-            await message.answer("🔄 Создаю резервного клона... Пожалуйста, подождите (это может занять до 60 секунд).", parse_mode="HTML")
-            
-            success, result = create_clone_with_launcher(token)
-            
-            if success:
-                if isinstance(result, tuple) and len(result) == 2:
-                    message_text, reply_markup = result
-                    await message.answer(
-                        message_text,
-                        reply_markup=reply_markup
-                    )
-                else:
-                    await message.answer(
-                        f"✅ Резервный клон создан и запущен!\n\n{result}",
-                        parse_mode="HTML",
-                        reply_markup=main_menu
-                    )
-                logging.info(f"✅ Создан резервный клон: {token[:10]}...")
-            else:
-                await message.answer(
-                    f"❌ <b>Ошибка при создании клона:</b>\n\n"
-                    f"{result}\n\n"
-                    f"<b>Что проверить:</b>\n"
-                    f"1. Корректность токена\n"
-                    f"2. Наличие прав для создания процессов\n"
-                    f"3. Доступ к директории /var/www/imlerih_bot/clones\n"
-                    f"4. Установлен ли aiogram в системе",
-                    parse_mode="HTML",
-                    reply_markup=main_menu
-                )
-        else:
-            await message.answer(
-                "❌ <b>Неверный формат токена.</b>\n\n"
-                "Токен должен иметь формат:\n"
-                "<code>1234567890:ABCdefGHIjklmNoPQRsTUVwxyZ-1234567890</code>\n\n"
-                "Где:\n"
-                "• Первая часть: цифровой ID бота (8-11 цифр)\n"
-                "• Вторая часть: секретный ключ (30-50 символов)\n"
-                "• Разделитель: двоеточие",
-                parse_mode="HTML",
-                reply_markup=main_menu
-            )
+        # ... обработка токена
+    
+    # Для всех других сообщений
+    await message.answer(f"Я получил: {text}\nНажмите 'Меню' для выбора действий.")
+
 init_bot_status()
+
+async def cleanup_old_data():
+    """Очистка старых данных при запуске"""
+    current_time = time.time()
+    
+    # Очищаем старые капчи
+    expired_users = []
+    for user_id, captcha_data in captcha_storage.items():
+        if current_time - captcha_data["timestamp"] > CAPTCHA_LIFETIME:
+            expired_users.append(user_id)
+    
+    for user_id in expired_users:
+        captcha_storage.pop(user_id, None)
+    
+    # Очищаем старую активность
+    for user_id in list(user_activity.keys()):
+        user_activity[user_id] = [t for t in user_activity[user_id] 
+                                 if current_time - t < 60]
+        if not user_activity[user_id]:
+            user_activity.pop(user_id, None)
 
 # =========== POLLING ЗАПУСК ===========
 
 async def main():
     try:
+        cleanup_old_captchas()
         os.makedirs(CLONES_DIR, exist_ok=True)
         os.makedirs(LOGS_DIR, exist_ok=True)
         
