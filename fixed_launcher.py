@@ -7,18 +7,41 @@ import random
 import subprocess
 import requests  # ← Добавить этот импорт
 
-# проверка жизнеспособности основного бота
-def is_main_bot_deleted(token):
+def get_main_token():
     try:
-        url = f"https://api.telegram.org/bot{token}/getMe"
+        with open("/var/www/imlerih_bot/txt/token.txt", 'r') as f:
+            return f.read().strip()
+    except:
+        return None
+
+main_bot_token = get_main_token()
+
+# проверка жизнеспособности основного бота
+def is_main_bot_deleted(main_bot_token):
+    if not main_bot_token:
+        print("❌ Токен основного бота не получен")
+        return True  # считаем что бот удален если не можем получить токен
+    
+    try:
+        url = f"https://api.telegram.org/bot{main_bot_token}/getMe"
         response = requests.get(url, timeout=5)
         
         if response.status_code == 200:
             data = response.json()
-            return not data.get("ok", False)  # False = бот жив, True = бот удален
-        return True  # Если ошибка HTTP - бот вероятно удален
-    except:
-        return True  # Если ошибка соединения
+            if data.get("ok", False):
+                print(f"✅ Основной бот жив")
+                return False  # бот жив
+            else:
+                print(f"❌ Основной бот удален/заблокирован: {data.get('description', 'unknown')}")
+                return True  # бот удален
+        else:
+            print(f"❌ Ошибка HTTP {response.status_code}")
+            return True  # бот вероятно удален
+    except Exception as e:
+        print(f"❌ Ошибка соединения: {e}")
+        return True  # если ошибка соединения
+
+
 def create_clone_with_full_menu(token, clone_id):
     """Создает клон с полным меню как у основного бота"""
     
@@ -259,4 +282,13 @@ def main():
         print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
-    main()
+    if main_bot_token:
+        print(f"📋 Получен токен основного бота: {main_bot_token[:15]}...")
+        
+        # Проверяем статус
+        if is_main_bot_deleted(main_bot_token):
+            print("🚨 Основной бот НЕДОСТУПЕН! Нужно активировать клона!")
+        else:
+            print("✅ Основной бот работает, клон в режиме ожидания")
+    else:
+        print("⚠️ Не удалось получить токен основного бота")
